@@ -22,44 +22,39 @@ public class RoseDrawing extends JPanel {
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
 
-        // Установка цветов
-        Color redColor = new Color(255, 0, 0);
-        Color blackColor = new Color(0, 0, 0);
-        Color blueColor = new Color(0, 0, 255);
-        Color yellowColor = new Color(255, 255, 0);
+        // Определяем размеры и положение для фона
+        int squareSize = 333; // Размер квадрата для фона
+        // Рисуем фон
+        g.setColor(Color.BLUE);
+        g.fillRect(0, 0, squareSize, squareSize); // верхний левый квадрат
+        g.setColor(Color.YELLOW);
+        g.fillRect(squareSize, squareSize, squareSize, squareSize); // нижний правый квадрат
+        g.setColor(Color.BLACK);
+        g.fillRect(2 * squareSize, 0, squareSize, 2 * squareSize); // правая часть
 
-        // Фоновые блоки
-        g.setColor(blueColor);
-        g.fillRect(50, 50, 100, 100); // Синий фоновый квадрат
+        // Рисуем лепестки розы
+        int centerX = 500; // центр розы по горизонтали
+        int centerY = 500; // центр розы по вертикали
+        int petalSize = 300; // размер лепестка
+        g.setColor(Color.RED);
+        g.fillOval(centerX - petalSize / 2, centerY - petalSize, petalSize, petalSize); // верхний лепесток
+        g.fillOval(centerX - petalSize / 2, centerY, petalSize, petalSize); // нижний лепесток
+        g.fillOval(centerX - petalSize, centerY - petalSize / 2, petalSize, petalSize); // левый лепесток
+        g.fillOval(centerX, centerY - petalSize / 2, petalSize, petalSize); // правый лепесток
 
-        g.setColor(yellowColor);
-        g.fillRect(150, 50, 100, 100); // Желтый фоновый квадрат
+        // Рисуем стебель и листья
+        g.setColor(Color.BLACK);
+        g.fillRect(centerX - petalSize / 6, centerY + petalSize / 2, petalSize / 3, petalSize); // стебель
+        g.fillOval(centerX - petalSize / 2, centerY + petalSize, petalSize / 2, petalSize / 4); // нижний лист
+        g.fillOval(centerX, centerY + petalSize, petalSize / 2, petalSize / 4); // нижний лист
 
-        g.setColor(blackColor);
-        g.fillRect(50, 150, 200, 50); // Черный фоновый прямоугольник
-
-        // Рисование розы
-        // Лепестки розы
-        g.setColor(redColor);
-        g.fillArc(100, 100, 100, 100, 0, 180); // Верхний лепесток
-        g.fillArc(75, 125, 100, 100, 270, 180); // Левый лепесток
-        g.fillArc(125, 125, 100, 100, 90, 180); // Правый лепесток
-        g.fillArc(100, 150, 100, 100, 180, 180); // Нижний лепесток
-
-        // Контур розы
-        g.setColor(blackColor);
-        g.drawArc(100, 100, 100, 100, 0, 180); // Верхний контур лепестка
-        g.drawArc(75, 125, 100, 100, 270, 180); // Левый контур лепестка
-        g.drawArc(125, 125, 100, 100, 90, 180); // Правый контур лепестка
-        g.drawArc(100, 150, 100, 100, 180, 180); // Нижний контур лепестка
-
-        // Стебель розы
-        g.fillRect(145, 250, 10, 50); // Стебель
-
-        // Листья розы
-        g.fillOval(130, 275, 30, 15); // Левый лист
-        g.fillOval(140, 275, 30, 15); // Правый лист
+        // Рисуем внутренние детали розы
+        g.setColor(Color.WHITE);
+        g.fillOval(centerX - petalSize / 4, centerY - petalSize / 4, petalSize / 2, petalSize / 2); // центральный круг
+        g.setColor(Color.BLACK);
+        g.drawOval(centerX - petalSize / 4, centerY - petalSize / 4, petalSize / 2, petalSize / 2); // контур центрального круга
     }
+
 
 
 
