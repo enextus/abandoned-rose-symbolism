@@ -1,22 +1,28 @@
 package main.java;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.*;
 
-class RoseDrawingTest {
+import java.awt.Graphics;
 
-    @org.junit.jupiter.api.BeforeEach
-    void setUp() {
+public class RoseDrawingTest {
+
+    @Test
+    public void testRoseDrawingCreation() {
+        RoseDrawing roseDrawing = new RoseDrawing();
+        assertNotEquals(null, roseDrawing);
     }
 
-    @org.junit.jupiter.api.AfterEach
-    void tearDown() {
-    }
+    @Test
+    public void testPaintComponent() {
+        RoseDrawing roseDrawing = new RoseDrawing();
+        Graphics graphics = mock(Graphics.class);
+        roseDrawing.paintComponent(graphics);
 
-    @org.junit.jupiter.api.Test
-    void updateUI() {
-    }
-
-    @org.junit.jupiter.api.Test
-    void getUI() {
+        // Проверяем, были ли вызваны методы объекта Graphics
+        verify(graphics, atLeastOnce()).setColor(any());
+        verify(graphics, atLeastOnce()).fillRect(anyInt(), anyInt(), anyInt(), anyInt());
+        verify(graphics, atLeastOnce()).fillOval(anyInt(), anyInt(), anyInt(), anyInt());
+        verify(graphics, atLeastOnce()).drawOval(anyInt(), anyInt(), anyInt(), anyInt());
     }
 }
