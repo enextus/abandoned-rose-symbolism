@@ -1,22 +1,9 @@
-package main.java;
+
 
 import javax.swing.*;
 import java.awt.*;
 
 public class RoseDrawing extends JPanel {
-
-/*    // Метод paintComponent переопределен для кастомной отрисовки.
-    @Override
-    protected void paintComponent(Graphics g) {
-        super.paintComponent(g);
-        g.setColor(Color.RED);
-        g.fillOval(100, 100, 50, 50);
-        g.fillOval(120, 80, 50, 50);
-        g.fillOval(140, 100, 50, 50);
-        g.fillOval(120, 120, 50, 50);
-        g.setColor(Color.GREEN);
-        g.fillRect(135, 150, 10, 50);
-    }*/
 
     @Override
     protected void paintComponent(Graphics g) {

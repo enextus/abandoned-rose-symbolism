@@ -1,6 +1,8 @@
-package main.java;
+
 
 import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.mockito.Mockito.*;
 
 import java.awt.Graphics;
