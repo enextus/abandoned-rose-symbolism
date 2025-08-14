@@ -8,20 +8,18 @@
     <artifactId>abandoned-rose-symbolism</artifactId>
     <version>1.0.0</version>
     <name>abandoned-rose-symbolism</name>
-    <description>Swing app that draws a symbolic 'abandoned rose' with crisp scaling  layering.</description>
+    <description>Swing app that draws a symbolic 'abandoned rose' with crisp scaling layering.</description>
     <packaging>jar</packaging>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>21</maven.compiler.release>
-
-        <!-- версии тестовых либ -->
         <junit.jupiter.version>5.10.2</junit.jupiter.version>
         <mockito.version>5.12.0</mockito.version>
     </properties>
 
     <dependencies>
-        <!-- ТЕСТЫ: JUnit 5 -->
+        <!-- Tests: JUnit 5 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -29,7 +27,7 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- ТЕСТЫ: Mockito -->
+        <!-- Tests: Mockito -->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
@@ -46,7 +44,7 @@
 
     <build>
         <plugins>
-            <!-- Компиляция под Java 21 -->
+            <!-- Java 21 compile -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -56,18 +54,32 @@
                 </configuration>
             </plugin>
 
-            <!-- Тестовый раннер (JUnit 5 / Mockito) -->
+            <!-- JUnit 5 runner -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <!-- На всякий случай отключаем module-path, чтобы не мешал запуску Jupiter -->
                     <useModulePath>false</useModulePath>
+                    <!-- опционально: приглушить предупреждение ByteBuddy при тестах -->
+                    <!-- <argLine>-XX:+EnableDynamicAgentLoading</argLine> -->
                 </configuration>
             </plugin>
 
-            <!-- Толстый JAR (+ Manifest Main-Class) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>org.example.RoseDrawing</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+
+            <!-- Fat JAR + Manifest Main-Class -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -78,12 +90,15 @@
                         <goals><goal>shade</goal></goals>
                         <configuration>
                             <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>shaded</shadedClassifierName>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>org.example.RoseDrawing</mainClass>
                                 </transformer>
                             </transformers>
                         </configuration>
+
                     </execution>
                 </executions>
             </plugin>
