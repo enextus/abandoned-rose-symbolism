@@ -36,3 +36,11 @@ build/
 
 ### Mac OS ###
 .DS_Store
+# Test artifacts
+coverage-report/
+test-results/
+
+# Build artifacts
+out/
+target/
+abandoned-rose-symbolism.jar
