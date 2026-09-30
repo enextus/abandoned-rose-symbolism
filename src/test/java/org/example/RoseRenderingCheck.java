@@ -35,11 +35,25 @@ public final class RoseRenderingCheck {
                 javax.swing.JPanel content=RoseDrawing.createContent();
                 RoseDrawing canvas=(RoseDrawing)content.getComponent(0);
                 javax.swing.JPanel toolbar=(javax.swing.JPanel)content.getComponent(1);
-                javax.swing.JButton redraw=(javax.swing.JButton)toolbar.getComponent(0);
+                javax.swing.JPanel buttonRow=(javax.swing.JPanel)toolbar.getComponent(0);
+                javax.swing.JPanel backColumn=(javax.swing.JPanel)buttonRow.getComponent(0);
+                javax.swing.JPanel redrawColumn=(javax.swing.JPanel)buttonRow.getComponent(2);
+                javax.swing.JButton back=(javax.swing.JButton)backColumn.getComponent(0);
+                javax.swing.JButton redraw=(javax.swing.JButton)redrawColumn.getComponent(0);
+                if(back.isEnabled()) throw new AssertionError("BACK must start disabled");
                 canvas.setSize(300,300);
                 BufferedImage before=new BufferedImage(300,300,BufferedImage.TYPE_INT_RGB);
                 java.awt.Graphics2D g=before.createGraphics();canvas.paint(g);g.dispose();
-                for(int n=0;n<12;n++) {
+                redraw.doClick(0);
+                RoseDrawing.Appearance first=canvas.getAppearance();
+                if(!back.isEnabled()) throw new AssertionError("BACK was not enabled after REDRAW");
+                redraw.doClick(0);
+                RoseDrawing.Appearance second=canvas.getAppearance();
+                back.doClick(0);
+                if(!first.equals(canvas.getAppearance())) throw new AssertionError("BACK did not restore saved preview");
+                redraw.doClick(0);
+                if(!second.equals(canvas.getAppearance())) throw new AssertionError("REDRAW did not move forward to saved preview");
+                for(int n=0;n<10;n++) {
                     RoseDrawing.Appearance old=canvas.getAppearance();
                     redraw.doClick(0);
                     RoseDrawing.Appearance next=canvas.getAppearance();
@@ -61,7 +75,7 @@ public final class RoseRenderingCheck {
             if(!java.util.Arrays.equals(first.getRGB(0,0,240,240,null,0,240),second.getRGB(0,0,240,240,null,0,240)))
                 throw new AssertionError("Appearance not deterministic: "+style);
         }
-        System.out.println("PASS: REDRAW button, new style/palette, cache invalidation, stable resize, all style renders");
+        System.out.println("PASS: BACK/REDRAW history, new style/palette, cache invalidation, stable resize, all style renders");
         System.out.println("PASS: deterministic rendering, rose/background, aspect ratio, portrait, Swing paint/resize, invalid dimensions");
     }
 }
