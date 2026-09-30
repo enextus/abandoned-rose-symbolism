@@ -1,24 +1,35 @@
 package org.example;
+
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.awt.Graphics;
+import javax.swing.SwingUtilities;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 
-import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
-@ExtendWith(MockitoExtension.class)
 class RoseDrawingMockitoTest {
 
-    @Mock
-    Graphics g;
-
     @Test
-    void paintComponent_doesNotExplode() {
-        var panel = new RoseDrawing();
-        // просто вызываем paint — цель: убедиться, что NPE нет и мок не требует специфики
-        panel.paint(g);
-        verifyNoMoreInteractions(g);
+    void paintsRoseWithoutErrors() {
+        assertDoesNotThrow(() ->
+                SwingUtilities.invokeAndWait(() -> {
+                    RoseDrawing panel = new RoseDrawing();
+                    panel.setSize(600, 600);
+
+                    BufferedImage image = new BufferedImage(
+                            600,
+                            600,
+                            BufferedImage.TYPE_INT_RGB
+                    );
+
+                    Graphics2D graphics = image.createGraphics();
+                    try {
+                        panel.paint(graphics);
+                    } finally {
+                        graphics.dispose();
+                    }
+                })
+        );
     }
 }
