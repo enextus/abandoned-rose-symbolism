@@ -8,10 +8,10 @@ Windows: `build.bat`. Linux/macOS: `sh build.sh`. Результат — `abando
 
 ```sh
 mvn clean package
-java -jar target/abandoned-rose-symbolism-2.1.0.jar
+java -jar target/abandoned-rose-symbolism-2.3.0.jar
 ```
 
-Maven POM содержит compiler-plugin, surefire-plugin и jar-plugin. Команда `mvn clean verify` запускает JUnit-тест RoseDrawingTest, который вызывает RoseRenderingCheck. JUnit 6.1.3 используется только для тестов. Скрипты test.bat/test.sh по-прежнему запускают автономную проверку без внешних зависимостей. Готовый JAR в корне и Maven JAR в target — разные файлы; запускайте именно пересобранный вариант.
+Maven POM содержит compiler-plugin, surefire-plugin и jar-plugin. Команда `mvn clean verify` запускает JUnit-тест RoseDrawingTest, с 35 сценариями. JUnit 6.1.3 используется только для тестов. Скрипты test.bat/test.sh запускают mvn clean verify с JUnit и JaCoCo. Готовый JAR в корне и Maven JAR в target — разные файлы; запускайте именно пересобранный вариант.
 
 ## Файлы
 
