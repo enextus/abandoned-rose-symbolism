@@ -11,7 +11,51 @@ import java.util.Random;
 
 /** Procedural Java2D painting. No downloaded images, fonts or runtime dependencies. */
 public final class RoseDrawing extends JPanel {
+    public enum Style { VELVET, ENGRAVING, ART_NOUVEAU, FADED_INK }
+    public record Appearance(long seed, float hueShift, float saturation, float exposure, Style style) {
+        public Appearance {
+            if (style == null || !Float.isFinite(hueShift) || !Float.isFinite(saturation)
+                    || !Float.isFinite(exposure) || saturation <= 0 || exposure <= 0)
+                throw new IllegalArgumentException("Invalid appearance");
+        }
+    }
+    public static final Appearance ORIGINAL = new Appearance(1913, 0, 1, 1, Style.VELVET);
+    private final Random choices = new Random();
+    private Appearance appearance = ORIGINAL;
     private BufferedImage cached;
+
+    public Appearance getAppearance() { return appearance; }
+
+    /** Call on the Swing event dispatch thread. Resizing never randomizes the art. */
+    public void redraw() {
+        if (!SwingUtilities.isEventDispatchThread())
+            throw new IllegalStateException("redraw must run on the EDT");
+        Style[] styles = Style.values();
+        Style next = styles[(appearance.style().ordinal() + 1 + choices.nextInt(styles.length - 1)) % styles.length];
+        float hue = (appearance.hueShift() + .12f + choices.nextFloat() * .76f) % 1f;
+        appearance = new Appearance(choices.nextLong(), hue,
+                .55f + choices.nextFloat() * .65f, .85f + choices.nextFloat() * .40f, next);
+        cached = null;
+        repaint();
+    }
+
+    public static JPanel createContent() {
+        RoseDrawing canvas = new RoseDrawing();
+        JPanel content = new JPanel(new BorderLayout());
+        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.CENTER, 18, 10));
+        toolbar.setBackground(new Color(17,22,23));
+        JLabel label = new JLabel("VELVET"); label.setForeground(new Color(214,197,159));
+        JButton button = new JButton("REDRAW");
+        button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
+        button.setToolTipText("Random color, tone and drawing style");
+        button.getAccessibleContext().setAccessibleDescription("Generate a new rose variation");
+        button.addActionListener(event -> {
+            canvas.redraw(); label.setText(canvas.getAppearance().style().name().replace('_', ' '));
+        });
+        toolbar.add(button); toolbar.add(label);
+        content.add(canvas, BorderLayout.CENTER); content.add(toolbar, BorderLayout.SOUTH);
+        return content;
+    }
     public RoseDrawing() { setBackground(new Color(17, 22, 23)); }
     @Override public Dimension getPreferredSize() { return new Dimension(1000, 1000); }
     @Override protected void paintComponent(Graphics graphics) {
@@ -19,10 +63,14 @@ public final class RoseDrawing extends JPanel {
         int w = getWidth(), h = getHeight();
         if (w < 1 || h < 1) return;
         if (cached == null || cached.getWidth() != w || cached.getHeight() != h)
-            cached = renderScene(w, h);
+            cached = renderScene(w, h, appearance);
         graphics.drawImage(cached, 0, 0, null);
     }
     public static BufferedImage renderScene(int width, int height) {
+        return renderScene(width, height, ORIGINAL);
+    }
+    public static BufferedImage renderScene(int width, int height, Appearance appearance) {
+        java.util.Objects.requireNonNull(appearance, "appearance");
         if (width < 1 || height < 1) throw new IllegalArgumentException("Positive dimensions required");
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = image.createGraphics();
@@ -32,17 +80,30 @@ public final class RoseDrawing extends JPanel {
             g.setColor(new Color(17,22,23)); g.fillRect(0,0,width,height);
             double scale = Math.min(width, height) / 1000.0;
             g.translate((width-1000*scale)/2, (height-1000*scale)/2); g.scale(scale,scale);
-            paintArtwork(g);
+            paintArtwork(g, appearance);
         } finally { g.dispose(); }
+        if (!appearance.equals(ORIGINAL)) tone(image, appearance);
         return image;
+    }
+    private static void tone(BufferedImage image, Appearance a) {
+        float[] hsb = new float[3];
+        int[] pixels = ((java.awt.image.DataBufferInt) image.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < pixels.length; i++) {
+            int rgb = pixels[i];
+            Color.RGBtoHSB((rgb >>> 16) & 255, (rgb >>> 8) & 255, rgb & 255, hsb);
+            float saturation = Math.min(1, hsb[1] * a.saturation());
+            float brightness = Math.min(1, hsb[2] * a.exposure());
+            if (a.style() == Style.FADED_INK) { saturation *= .45f; brightness = .08f + brightness * .86f; }
+            pixels[i] = Color.HSBtoRGB((hsb[0] + a.hueShift()) % 1f, saturation, brightness);
+        }
     }
     private static Path2D path(double... p) {
         Path2D q = new Path2D.Double(); q.moveTo(p[0],p[1]);
         for (int i=2; i<p.length; i+=6) q.curveTo(p[i],p[i+1],p[i+2],p[i+3],p[i+4],p[i+5]);
         return q;
     }
-    private static void paintArtwork(Graphics2D g) {
-        Random random = new Random(1913);
+    private static void paintArtwork(Graphics2D g, Appearance appearance) {
+        Random random = new Random(appearance.seed());
         g.setPaint(new RadialGradientPaint(470,360,740,new float[]{0,.65f,1},
                 new Color[]{new Color(65,66,51),new Color(27,36,35),new Color(9,15,19)}));
         g.fillRect(0,0,1000,1000);
@@ -85,14 +146,14 @@ public final class RoseDrawing extends JPanel {
             c.setColor(new Color(58+i*5,72+i*4,43));
             c.fill(path(0,35,-34,1,-50,-37,-38,-86,-15,-34,7,-20,0,35)); c.dispose();
         }
-        Graphics2D bloom=(Graphics2D)g.create(); bloom.translate(473,382); bloom.rotate(-.20);
+        Graphics2D bloom=(Graphics2D)g.create(); bloom.translate(473,382); bloom.rotate(-.20 + (appearance.equals(ORIGINAL) ? 0 : (random.nextDouble()-.5)*.3));
         // Unequal overlapping cupped petals, outside first, tightly folded heart last.
         for(int ring=0;ring<5;ring++) {
-            int count=ring==0?9:7;
+            int count=appearance.style()==Style.ART_NOUVEAU ? (ring==0?7:5) : (ring==0?9:7);
             double radius=172-ring*31;
             for(int i=0;i<count;i++) {
                 double angle=2*Math.PI*i/count+ring*.71;
-                petal(bloom,angle,radius,.91+random.nextDouble()*.20,ring);
+                petal(bloom,angle,radius,.91+random.nextDouble()*.20,ring,appearance.style());
             }
         }
         bloom.setPaint(new RadialGradientPaint(0,0,25,new float[]{0,1},
@@ -110,11 +171,11 @@ public final class RoseDrawing extends JPanel {
         g.setFont(new Font(Font.SERIF,Font.ITALIC,13));
         g.setColor(new Color(199,184,151,100)); g.drawString("what remains of tenderness",74,979);
     }
-    private static void petal(Graphics2D parent,double angle,double radius,double variation,int ring) {
+    private static void petal(Graphics2D parent,double angle,double radius,double variation,int ring,Style style) {
         Graphics2D g=(Graphics2D)parent.create();
         try {
             g.rotate(angle); g.translate(0,-radius*.40); g.scale(variation,1);
-            double w=radius*.73, h=radius;
+            double w=radius*(style==Style.ART_NOUVEAU?.58:.73), h=radius;
             Path2D p=path(-w*.78,5,-w*1.22,-h*.35,-w*.82,-h*.92,-w*.26,-h,
                 w*.10,-h*1.10,w*.57,-h*.82,w*.92,-h*.65,
                 w*1.17,-h*.08,w*.50,h*.54,0,h*.52,
@@ -123,7 +184,8 @@ public final class RoseDrawing extends JPanel {
             g.setPaint(new LinearGradientPaint(0,(float)-h,0,(float)(h*.52),new float[]{0,.22f,.62f,1},
                 new Color[]{new Color(193+ring*6,67+ring*5,78+ring*5),new Color(139+ring*9,29+ring*3,52+ring*3),
                     new Color(80+ring*7,13,34),new Color(34,9,23)}));
-            g.fill(p); g.setStroke(new BasicStroke(1.2f)); g.setColor(new Color(33,8,20,170)); g.draw(p);
+            if (style == Style.ENGRAVING) g.setPaint(new Color(127+ring*9,47,61));
+            g.fill(p); g.setStroke(new BasicStroke(style==Style.ART_NOUVEAU?2.8f:1.2f)); g.setColor(new Color(33,8,20,170)); g.draw(p);
             g.setColor(new Color(244,147,135,145)); g.setStroke(new BasicStroke(1.7f));
             g.draw(path(-w*.96,-h*.38,-w*.9,-h*.85,-w*.46,-h*1.08,-w*.26,-h,
                 w*.1,-h*1.1,w*.57,-h*.82,w*.92,-h*.65));
@@ -132,6 +194,12 @@ public final class RoseDrawing extends JPanel {
                 double x=(k/17.0-.5)*w*1.9;
                 g.setColor(new Color(238,140,130,16)); g.setStroke(new BasicStroke(.65f));
                 g.draw(path(x,-h,x*.95,-h*.6,x*.4,-h*.1,0,h*.48));
+            }
+            if (style == Style.ENGRAVING || style == Style.FADED_INK) {
+                g.setColor(new Color(27,8,22,style == Style.ENGRAVING?95:40));
+                g.setStroke(new BasicStroke(.8f));
+                for (double y=-h; y<h; y+=style==Style.ENGRAVING?5:9)
+                    g.draw(new Line2D.Double(-w*1.3,y,w*1.3,y+w*.6));
             }
             g.setClip(clip);
         } finally { g.dispose(); }
@@ -160,7 +228,7 @@ public final class RoseDrawing extends JPanel {
         if(GraphicsEnvironment.isHeadless()) {System.err.println("No display. Use --export rose.png");return;}
         SwingUtilities.invokeLater(()->{
             JFrame frame=new JFrame("Rosa relicta — Abandoned symbolism");
-            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); frame.setContentPane(new RoseDrawing());
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); frame.setContentPane(createContent());
             Dimension screen=Toolkit.getDefaultToolkit().getScreenSize();
             int size=Math.min(1000,Math.min(screen.width-80,screen.height-100));
             frame.setSize(Math.max(320,size),Math.max(320,size));frame.setLocationRelativeTo(null);frame.setVisible(true);

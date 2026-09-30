@@ -30,6 +30,38 @@ public final class RoseRenderingCheck {
         finally { graphics.dispose(); }
         try {RoseDrawing.renderScene(0,10);throw new AssertionError("Missing validation");}
         catch(IllegalArgumentException expected) { }
+        try {
+            javax.swing.SwingUtilities.invokeAndWait(() -> {
+                javax.swing.JPanel content=RoseDrawing.createContent();
+                RoseDrawing canvas=(RoseDrawing)content.getComponent(0);
+                javax.swing.JPanel toolbar=(javax.swing.JPanel)content.getComponent(1);
+                javax.swing.JButton redraw=(javax.swing.JButton)toolbar.getComponent(0);
+                canvas.setSize(300,300);
+                BufferedImage before=new BufferedImage(300,300,BufferedImage.TYPE_INT_RGB);
+                java.awt.Graphics2D g=before.createGraphics();canvas.paint(g);g.dispose();
+                for(int n=0;n<12;n++) {
+                    RoseDrawing.Appearance old=canvas.getAppearance();
+                    redraw.doClick(0);
+                    RoseDrawing.Appearance next=canvas.getAppearance();
+                    if(next.style()==old.style() || next.hueShift()==old.hueShift())
+                        throw new AssertionError("Redraw did not change appearance");
+                }
+                BufferedImage after=new BufferedImage(300,300,BufferedImage.TYPE_INT_RGB);
+                g=after.createGraphics();canvas.paint(g);g.dispose();
+                if(java.util.Arrays.equals(before.getRGB(0,0,300,300,null,0,300),after.getRGB(0,0,300,300,null,0,300)))
+                    throw new AssertionError("Stale render cache after REDRAW");
+                RoseDrawing.Appearance saved=canvas.getAppearance();
+                canvas.setSize(400,300);g=after.createGraphics();canvas.paint(g);g.dispose();
+                if(!saved.equals(canvas.getAppearance())) throw new AssertionError("Resize randomized art");
+            });
+        } catch(Exception e) { throw new AssertionError("REDRAW control failed",e); }
+        for(RoseDrawing.Style style:RoseDrawing.Style.values()) {
+            RoseDrawing.Appearance look=new RoseDrawing.Appearance(123,.4f,.9f,1.1f,style);
+            BufferedImage first=RoseDrawing.renderScene(240,240,look),second=RoseDrawing.renderScene(240,240,look);
+            if(!java.util.Arrays.equals(first.getRGB(0,0,240,240,null,0,240),second.getRGB(0,0,240,240,null,0,240)))
+                throw new AssertionError("Appearance not deterministic: "+style);
+        }
+        System.out.println("PASS: REDRAW button, new style/palette, cache invalidation, stable resize, all style renders");
         System.out.println("PASS: deterministic rendering, rose/background, aspect ratio, portrait, Swing paint/resize, invalid dimensions");
     }
 }
