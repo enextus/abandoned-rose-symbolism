@@ -7,6 +7,8 @@ import java.awt.geom.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 /** Procedural Java2D painting. No downloaded images, fonts or runtime dependencies. */
@@ -21,42 +23,173 @@ public final class RoseDrawing extends JPanel {
     }
     public static final Appearance ORIGINAL = new Appearance(1913, 0, 1, 1, Style.VELVET);
     private final Random choices = new Random();
+    private final List<Appearance> history = new ArrayList<>();
+    private int historyIndex;
     private Appearance appearance = ORIGINAL;
     private BufferedImage cached;
 
-    public Appearance getAppearance() { return appearance; }
+    public RoseDrawing() {
+        setBackground(new Color(17, 22, 23));
+        history.add(ORIGINAL);
+    }
 
-    /** Call on the Swing event dispatch thread. Resizing never randomizes the art. */
+    public Appearance getAppearance() { return appearance; }
+    public boolean canGoBack() { return historyIndex > 0; }
+    public boolean hasSavedForwardPreview() { return historyIndex + 1 < history.size(); }
+
+    /**
+     * Move one preview forward. If a saved forward preview exists after BACK, it is restored.
+     * At the newest preview a fresh variation is generated and appended to history.
+     * Call on the Swing event dispatch thread. Resizing never randomizes the art.
+     */
     public void redraw() {
-        if (!SwingUtilities.isEventDispatchThread())
-            throw new IllegalStateException("redraw must run on the EDT");
+        requireEdt("redraw");
+        if (hasSavedForwardPreview()) {
+            appearance = history.get(++historyIndex);
+        } else {
+            Appearance next = createNextAppearance();
+            history.add(next);
+            historyIndex++;
+            appearance = next;
+        }
+        invalidateArtwork();
+    }
+
+    /** Restore the previously shown preview, if one exists. */
+    public boolean back() {
+        requireEdt("back");
+        if (!canGoBack()) return false;
+        appearance = history.get(--historyIndex);
+        invalidateArtwork();
+        return true;
+    }
+
+    private Appearance createNextAppearance() {
         Style[] styles = Style.values();
         Style next = styles[(appearance.style().ordinal() + 1 + choices.nextInt(styles.length - 1)) % styles.length];
         float hue = (appearance.hueShift() + .12f + choices.nextFloat() * .76f) % 1f;
-        appearance = new Appearance(choices.nextLong(), hue,
+        return new Appearance(choices.nextLong(), hue,
                 .55f + choices.nextFloat() * .65f, .85f + choices.nextFloat() * .40f, next);
+    }
+
+    private static void requireEdt(String operation) {
+        if (!SwingUtilities.isEventDispatchThread())
+            throw new IllegalStateException(operation + " must run on the EDT");
+    }
+
+    private void invalidateArtwork() {
         cached = null;
         repaint();
+    }
+
+    private static final Color TOOLBAR_BACKGROUND = new Color(20, 29, 27);
+
+    private static ImageIcon loadButtonIcon(String resourceName) {
+        java.net.URL resource = RoseDrawing.class.getResource("/ui/" + resourceName);
+        if (resource == null) throw new IllegalStateException("Missing UI resource: " + resourceName);
+        return new ImageIcon(resource);
+    }
+
+    private static JButton configureArtworkButton(JButton button, String normal, String hover, String pressed,
+                                                     Dimension size, String tooltip, String accessibleDescription) {
+        button.setIcon(loadButtonIcon(normal));
+        button.setRolloverIcon(loadButtonIcon(hover));
+        button.setPressedIcon(loadButtonIcon(pressed));
+        button.setPreferredSize(size);
+        button.setMinimumSize(size);
+        button.setMaximumSize(size);
+        button.setAlignmentX(Component.CENTER_ALIGNMENT);
+        button.setBorderPainted(false);
+        button.setContentAreaFilled(false);
+        button.setFocusPainted(false);
+        button.setOpaque(false);
+        button.setMargin(new Insets(0, 0, 0, 0));
+        button.setHorizontalTextPosition(SwingConstants.CENTER);
+        button.setVerticalTextPosition(SwingConstants.CENTER);
+        button.setIconTextGap(0);
+        button.setForeground(new Color(0, 0, 0, 0));
+        button.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        button.setRolloverEnabled(true);
+        button.setToolTipText(tooltip);
+        button.getAccessibleContext().setAccessibleName(button.getText());
+        button.getAccessibleContext().setAccessibleDescription(accessibleDescription);
+        return button;
+    }
+
+    private static JButton createBackButton() {
+        JButton button = configureArtworkButton(new JButton("BACK"),
+                "back-art-nouveau.png", "back-art-nouveau-hover.png", "back-art-nouveau-pressed.png",
+                new Dimension(136, 143), "Previous saved preview", "Show the previously viewed rose preview");
+        button.setDisabledIcon(loadButtonIcon("back-art-nouveau-disabled.png"));
+        return button;
+    }
+
+    private static JButton createRedrawButton() {
+        return configureArtworkButton(new JButton("REDRAW"),
+                "redraw-art-nouveau.png", "redraw-art-nouveau-hover.png", "redraw-art-nouveau-pressed.png",
+                new Dimension(300, 143), "Next preview / generate a new variation", "Show the next saved preview or generate a new rose variation");
     }
 
     public static JPanel createContent() {
         RoseDrawing canvas = new RoseDrawing();
         JPanel content = new JPanel(new BorderLayout());
-        JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.CENTER, 18, 10));
-        toolbar.setBackground(new Color(17,22,23));
-        JLabel label = new JLabel("VELVET"); label.setForeground(new Color(214,197,159));
-        JButton button = new JButton("REDRAW");
-        button.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 14));
-        button.setToolTipText("Random color, tone and drawing style");
-        button.getAccessibleContext().setAccessibleDescription("Generate a new rose variation");
-        button.addActionListener(event -> {
-            canvas.redraw(); label.setText(canvas.getAppearance().style().name().replace('_', ' '));
+        JPanel toolbar = new JPanel();
+        toolbar.setLayout(new BoxLayout(toolbar, BoxLayout.Y_AXIS));
+        toolbar.setBackground(TOOLBAR_BACKGROUND);
+        toolbar.setBorder(BorderFactory.createEmptyBorder(2, 0, 7, 0));
+
+        JButton backButton = createBackButton();
+        JButton redrawButton = createRedrawButton();
+        backButton.setEnabled(false);
+
+        JLabel label = new JLabel("VELVET");
+        label.setAlignmentX(Component.CENTER_ALIGNMENT);
+        label.setFont(new Font(Font.SERIF, Font.PLAIN, 12));
+        label.setForeground(new Color(214, 197, 159));
+        label.setHorizontalAlignment(SwingConstants.CENTER);
+        label.setPreferredSize(new Dimension(150, 18));
+        label.setMinimumSize(new Dimension(150, 18));
+        label.setMaximumSize(new Dimension(150, 18));
+        label.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
+
+        JPanel redrawColumn = new JPanel();
+        redrawColumn.setLayout(new BoxLayout(redrawColumn, BoxLayout.Y_AXIS));
+        redrawColumn.setOpaque(false);
+        redrawColumn.add(redrawButton);
+        redrawColumn.add(label);
+
+        JPanel backColumn = new JPanel();
+        backColumn.setLayout(new BoxLayout(backColumn, BoxLayout.Y_AXIS));
+        backColumn.setOpaque(false);
+        backColumn.add(backButton);
+        backColumn.add(Box.createRigidArea(new Dimension(0, 18)));
+
+        JPanel buttonRow = new JPanel();
+        buttonRow.setLayout(new BoxLayout(buttonRow, BoxLayout.X_AXIS));
+        buttonRow.setOpaque(false);
+        buttonRow.setAlignmentX(Component.CENTER_ALIGNMENT);
+        buttonRow.add(backColumn);
+        buttonRow.add(Box.createRigidArea(new Dimension(8, 0)));
+        buttonRow.add(redrawColumn);
+
+        Runnable refreshControls = () -> {
+            label.setText(canvas.getAppearance().style().name().replace('_', ' '));
+            backButton.setEnabled(canvas.canGoBack());
+        };
+        backButton.addActionListener(event -> {
+            canvas.back();
+            refreshControls.run();
         });
-        toolbar.add(button); toolbar.add(label);
-        content.add(canvas, BorderLayout.CENTER); content.add(toolbar, BorderLayout.SOUTH);
+        redrawButton.addActionListener(event -> {
+            canvas.redraw();
+            refreshControls.run();
+        });
+
+        toolbar.add(buttonRow);
+        content.add(canvas, BorderLayout.CENTER);
+        content.add(toolbar, BorderLayout.SOUTH);
         return content;
     }
-    public RoseDrawing() { setBackground(new Color(17, 22, 23)); }
     @Override public Dimension getPreferredSize() { return new Dimension(1000, 1000); }
     @Override protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
@@ -230,8 +363,10 @@ public final class RoseDrawing extends JPanel {
             JFrame frame=new JFrame("Rosa relicta — Abandoned symbolism");
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); frame.setContentPane(createContent());
             Dimension screen=Toolkit.getDefaultToolkit().getScreenSize();
-            int size=Math.min(1000,Math.min(screen.width-80,screen.height-100));
-            frame.setSize(Math.max(320,size),Math.max(320,size));frame.setLocationRelativeTo(null);frame.setVisible(true);
+            int size=Math.min(1000,Math.min(screen.width-80,screen.height-220));
+            int width=Math.max(460,size);
+            int height=Math.min(screen.height-60, Math.max(500,size+175));
+            frame.setSize(width,height);frame.setLocationRelativeTo(null);frame.setVisible(true);
         });
     }
 }
