@@ -1,16 +1,16 @@
 # Настройка изображения
 
-Все настройки сейчас находятся в `src/main/java/org/example/RoseDrawing.java`. Кнопка REDRAW случайно выбирает настройки. Отдельного JSON-конфига и ручной панели настройки нет. После правок пересоберите JAR.
+Настройки художественной палитры находятся в `src/main/java/org/example/RoseDrawing.java` и выбираются кнопкой REDRAW. Начиная с 2.5.0 три параметра *геометрии* можно выбирать без изменения кода в отдельной строке под кнопками: Bloom (BUD/CLASSIC/FULL), Petal layers (3–8) и Morning dew. JSON-конфига нет. После ручных правок исходников пересоберите JAR.
 
 | Что изменить | Где |
 |---|---|
 | Размер CLI PNG | renderScene(1600,1600) в main |
 | Фон | RadialGradientPaint в начале paintArtwork |
 | Цвет лепестков | LinearGradientPaint в petal |
-| Число колец | цикл ring < 5 |
-| Лепестки в кольце | count = ring == 0 ? 9 : 7 |
-| Размер бутона | radius = 172 - ring * 31 |
-| Центр и наклон | bloom.translate(473,382), rotate(-.20) |
+| Число колец | `FlowerOptions.petalLayers()` — UI 3–8 |
+| Лепестки в кольце | `count` в цикле `paintArtwork`, зависит от BloomStage и Style |
+| Размер бутона | BloomStage управляет масштабом; `radius = 172 - ring * ringStep` |
+| Центр и наклон | `bloom.translate(...)`, `bloom.rotate(...)` в `paintArtwork` |
 | Фактура | Random(1913), цикл 10500 |
 | Стебель | Path2D stem в paintArtwork |
 | Упавшие лепестки | три вызова fallen |
@@ -26,12 +26,39 @@
 
 После любого изменения сравните preview и повторите тест. Тест цветовых долей специально привязан к красной розе на тёмном фоне; при смене художественной палитры его критерии нужно осмысленно обновить.
 
-## История и случайные варианты (2.3.0)
+## История и случайные варианты (2.4.0)
 
-REDRAW вызывает `redraw()` в EDT. Если после BACK существует сохранённое следующее превью, REDRAW восстанавливает его без новой случайной генерации. Только на конце истории создаётся новый `Appearance`. BACK вызывает `back()` и возвращает предыдущий сохранённый `Appearance`.
+REDRAW вызывает `redraw()` в EDT и всегда создаёт новый `Appearance`. BACK вызывает `back()` и возвращает предыдущий сохранённый `Appearance`, FORWARD вызывает `forward()` и возвращает следующий уже сохранённый `Appearance`. Если REDRAW нажать после BACK, все сохранённые элементы справа от текущей позиции удаляются перед добавлением новой вариации.
 
 Appearance хранит seed, hueShift, saturation, exposure и Style. Для нового варианта hue меняется с шагом 0.12–0.88 оборота; saturation — 0.55–1.20; exposure — 0.85–1.25. Следующий сгенерированный стиль случайно выбирается из трёх остальных. Seed управляет фактурой и вариациями лепестков.
 
 VELVET: градиенты; ENGRAVING: плоская заливка и штриховка; ART_NOUVEAU: более узкие лепестки, 27 вместо 37, усиленный контур; FADED_INK: приглушённая насыщенность, приподнятые тени, редкая штриховка. Цветовой сдвиг применяется ко всему изображению.
 
 renderScene(width,height,appearance) воспроизводит вариант. Перегрузка с двумя аргументами сохраняет ORIGINAL для совместимости. CLI экспортирует ORIGINAL; экспорт текущего случайного варианта через GUI пока не добавлен.
+
+## Три настройки цветка (2.5.0)
+
+`FlowerOptions(BloomStage bloom, int petalLayers, boolean dew)` — неизменяемые параметры цветка.
+Исходный вариант — `DEFAULT_FLOWER = new FlowerOptions(CLASSIC, 5, false)`.
+
+- BUD рисует компактную розу с более узкими, вытянутыми лепестками.
+- CLASSIC полностью повторяет прежнюю геометрию (5 слоёв, без росы).
+- FULL увеличивает ширину и число лепестков внешней части цветка.
+- Петал-слои 3–8 изменяют количество концентрических колец.
+- Morning dew добавляет воспроизводимые капли с отдельным seed, не меняя палитру.
+
+В коде:
+
+```java
+var flower = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 7, true);
+var image = RoseDrawing.renderScene(1600, 1600, RoseDrawing.ORIGINAL, flower);
+```
+
+Или через CLI:
+
+```sh
+java -jar abandoned-rose-symbolism.jar --export my-rose.png --bloom full --layers 7 --dew
+```
+
+В GUI `setFlowerOptions(...)` вызывать на EDT. BACK/FORWARD сохраняют и восстанавливают
+общий `RoseState`, а REDRAW сохраняет текущие `FlowerOptions`, изменяя только `Appearance`.
