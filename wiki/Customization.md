@@ -1,64 +1,48 @@
 # Настройка изображения
 
-Настройки художественной палитры находятся в `src/main/java/org/example/RoseDrawing.java` и выбираются кнопкой REDRAW. Начиная с 2.5.0 три параметра *геометрии* можно выбирать без изменения кода в отдельной строке под кнопками: Bloom (BUD/CLASSIC/FULL), Petal layers (3–8) и Morning dew. JSON-конфига нет. После ручных правок исходников пересоберите JAR.
+Без правки кода доступны: REDRAW (новый стиль, сорт-цвет, насыщенность, экспозиция, seed), Bloom, Petal layers, Morning dew, ракурс (мышь, стрелки, Turntable) и все флаги CLI (`--style`, `--hue`, `--seed`, `--size`, `--yaw`, `--pitch`, `--bloom`, `--layers`, `--dew`). После ручных правок исходников пересоберите JAR (`build.*`).
 
 | Что изменить | Где |
 |---|---|
-| Размер CLI PNG | renderScene(1600,1600) в main |
-| Фон | RadialGradientPaint в начале paintArtwork |
-| Цвет лепестков | LinearGradientPaint в petal |
-| Число колец | `FlowerOptions.petalLayers()` — UI 3–8 |
-| Лепестки в кольце | `count` в цикле `paintArtwork`, зависит от BloomStage и Style |
-| Размер бутона | BloomStage управляет масштабом; `radius = 172 - ring * ringStep` |
-| Центр и наклон | `bloom.translate(...)`, `bloom.rotate(...)` в `paintArtwork` |
-| Фактура | Random(1913), цикл 10500 |
-| Стебель | Path2D stem в paintArtwork |
-| Упавшие лепестки | три вызова fallen |
-| Подпись | drawString в конце paintArtwork |
+| Число лепестков | `RoseGeometry.petalCount` (`6 × layers + 5`) |
+| Форма лепестков по стадиям | `RoseGeometry.petalShape` — `phi0`, `bend`, `lip`, `length`, `halfWidth`, `roll` |
+| Волнистость края | `petalShape`: `ruffle`, `ruffleFreq` |
+| Наклон цветка к зрителю | `tilt` в `RoseGeometry.build` |
+| Стебель | `RoseGeometry.stemCurve` (контрольные точки), радиус в `addStem` |
+| Листья | два вызова `addLeaf` в `build`: узел на стебле, направление, размер |
+| Опавшие лепестки | `spots` в `addFallenPetals` (x, z, масштаб) |
+| Цвета сортов | таблица `STOPS` в `RosePalette` (линейный RGB) |
+| Цвет листьев, стебля, шипов | `RosePalette.albedo` |
+| Свет | `KEY_VIEW`, `RIM_VIEW`, `KEY_COLOR`, `RIM_COLOR` в `RoseLighting` |
+| Материалы (обхват, просвет, отлив, блик) | таблица `MATERIAL` в `RoseLighting` |
+| Небо для AO | `RoseLighting.sky` |
+| Композиция и масштаб | `CENTER_X/Y`, `ZOOM`, `ELEVATION` в `RoseRenderer` |
+| Сглаживание | `RoseRenderer.supersamplingFor` |
+| Фон, арка, нимб, фактура, подпись | `RoseBackdrop` |
+| Штриховка гравюры | `RoseRasterizer.engraving`, плотность — `frame.hatch` в `RoseRenderer` |
 
-## Пример: более тёмная роза
+## Пример: тёмная «чёрная» роза
 
-Уменьшите красную составляющую четырёх цветов градиента в petal, сохраняя светлый верх и тёмное основание. Не выходите за диапазон RGB 0–255. Изменение количества колец требует пересмотра радиуса: он должен оставаться положительным, как и геометрия градиента.
+В `RosePalette.STOPS` уменьшите первую строку (crimson) примерно вдвое, оставив зелёный и синий каналы очень малыми относительно красного: насыщенный тёмный красный должен оставаться красным после тональной компрессии.
 
 ## Пример: крупный экспорт
 
-Поменяйте вызов на `renderScene(2400,2400)`, выполните build, затем экспорт. Увеличение разрешения повышает расход памяти примерно пропорционально площади. Не меняйте логические 1000 × 1000 для обычного увеличения PNG.
+```sh
+java -jar abandoned-rose-symbolism.jar --export big.png --size 4000
+```
 
-После любого изменения сравните preview и повторите тест. Тест цветовых долей специально привязан к красной розе на тёмном фоне; при смене художественной палитры его критерии нужно осмысленно обновить.
+Начиная с 1250 px используется самая плотная сетка; память растёт примерно пропорционально площади (полосы растеризатора ограничивают буферы, но итоговое изображение и фон — полноразмерные).
 
-## История и случайные варианты (2.4.0)
-
-REDRAW вызывает `redraw()` в EDT и всегда создаёт новый `Appearance`. BACK вызывает `back()` и возвращает предыдущий сохранённый `Appearance`, FORWARD вызывает `forward()` и возвращает следующий уже сохранённый `Appearance`. Если REDRAW нажать после BACK, все сохранённые элементы справа от текущей позиции удаляются перед добавлением новой вариации.
-
-Appearance хранит seed, hueShift, saturation, exposure и Style. Для нового варианта hue меняется с шагом 0.12–0.88 оборота; saturation — 0.55–1.20; exposure — 0.85–1.25. Следующий сгенерированный стиль случайно выбирается из трёх остальных. Seed управляет фактурой и вариациями лепестков.
-
-VELVET: градиенты; ENGRAVING: плоская заливка и штриховка; ART_NOUVEAU: более узкие лепестки, 27 вместо 37, усиленный контур; FADED_INK: приглушённая насыщенность, приподнятые тени, редкая штриховка. Цветовой сдвиг применяется ко всему изображению.
-
-renderScene(width,height,appearance) воспроизводит вариант. Перегрузка с двумя аргументами сохраняет ORIGINAL для совместимости. CLI экспортирует ORIGINAL; экспорт текущего случайного варианта через GUI пока не добавлен.
-
-## Три настройки цветка (2.5.0)
-
-`FlowerOptions(BloomStage bloom, int petalLayers, boolean dew)` — неизменяемые параметры цветка.
-Исходный вариант — `DEFAULT_FLOWER = new FlowerOptions(CLASSIC, 5, false)`.
-
-- BUD рисует компактную розу с более узкими, вытянутыми лепестками.
-- CLASSIC полностью повторяет прежнюю геометрию (5 слоёв, без росы).
-- FULL увеличивает ширину и число лепестков внешней части цветка.
-- Петал-слои 3–8 изменяют количество концентрических колец.
-- Morning dew добавляет воспроизводимые капли с отдельным seed, не меняя палитру.
-
-В коде:
+## Программно
 
 ```java
+var look = new RoseDrawing.Appearance(1858, .62f, 1, 1, RoseDrawing.Style.ENGRAVING);
 var flower = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 7, true);
-var image = RoseDrawing.renderScene(1600, 1600, RoseDrawing.ORIGINAL, flower);
+var image = RoseDrawing.renderScene(1600, 1600, look, flower, new RoseDrawing.View(40, 10));
 ```
 
-Или через CLI:
+## История и случайные варианты
 
-```sh
-java -jar abandoned-rose-symbolism.jar --export my-rose.png --bloom full --layers 7 --dew
-```
+BACK/REDRAW/FORWARD работают как в 2.4/2.5: история хранит `RoseState(Appearance, FlowerOptions)`, REDRAW после BACK отбрасывает ветку вперёд. Ракурс (`View`) в историю не входит, как и размер окна: REDRAW сохраняет текущий поворот, двойной щелчок или Home возвращают исходный.
 
-В GUI `setFlowerOptions(...)` вызывать на EDT. BACK/FORWARD сохраняют и восстанавливают
-общий `RoseState`, а REDRAW сохраняет текущие `FlowerOptions`, изменяя только `Appearance`.
+Новый вариант REDRAW: hue сдвигается на 0.12–0.88 круга (то есть другой сорт), saturation 0.55–1.20, exposure 0.85–1.25, стиль — один из трёх других.

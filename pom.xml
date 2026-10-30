@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.example</groupId>
     <artifactId>abandoned-rose-symbolism</artifactId>
-    <version>2.5.0</version>
+    <version>3.0.0</version>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>17</maven.compiler.release>
@@ -73,6 +73,8 @@
                     <failIfNoTests>true</failIfNoTests>
                     <systemPropertyVariables>
                         <java.awt.headless>true</java.awt.headless>
+                        <junit.jupiter.execution.parallel.enabled>false</junit.jupiter.execution.parallel.enabled>
+                        <junit.jupiter.execution.timeout.default>90 s</junit.jupiter.execution.timeout.default>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

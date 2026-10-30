@@ -1,10 +1,13 @@
 package org.example;
 
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
@@ -12,20 +15,32 @@ import java.awt.image.BufferedImage;
 import java.io.*;
 import java.nio.file.Path;
 import java.util.Arrays;
+
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Public contract tests for {@link RoseDrawing}.
+ *
+ * <p>The suite is grouped by responsibility so a failure immediately identifies the
+ * broken contract: rendering, history, Swing UI, flower controls, or CLI I/O.
+ */
 class RoseDrawingTest {
     @TempDir Path temp;
+
     private static int[] pixels(BufferedImage image) {
-        return image.getRGB(0,0,image.getWidth(),image.getHeight(),null,0,image.getWidth());
+        return image.getRGB(0, 0, image.getWidth(), image.getHeight(), null, 0, image.getWidth());
     }
+
     private static BufferedImage paint(RoseDrawing panel, int w, int h) {
-        panel.setSize(w,h);
-        BufferedImage image=new BufferedImage(Math.max(1,w),Math.max(1,h),BufferedImage.TYPE_INT_RGB);
-        Graphics2D g=image.createGraphics();
-        try {panel.paintComponent(g);} finally {g.dispose();}
+        panel.setSize(w, h);
+        BufferedImage image = new BufferedImage(Math.max(1, w), Math.max(1, h), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = image.createGraphics();
+        try { panel.paintComponent(g); } finally { g.dispose(); }
         return image;
     }
+
+    @Nested @DisplayName("Rendering API")
+    class RenderingApi {
     @Test void originalHasRecognizableRoseAndDarkBackground() {
         BufferedImage image=RoseDrawing.renderScene(400,400);
         int red=0,dark=0;
@@ -90,19 +105,10 @@ class RoseDrawingTest {
         BufferedImage image=RoseDrawing.renderScene(1,1);
         assertEquals(1,image.getWidth());assertEquals(1,image.getHeight());
     }
-    @Test void panelCachesAndResizesWithoutChangingAppearance() throws Exception {
-        SwingUtilities.invokeAndWait(()->{
-            RoseDrawing panel=new RoseDrawing();
-            assertEquals(new Dimension(1000,1000),panel.getPreferredSize());
-            assertEquals(RoseDrawing.ORIGINAL,panel.getAppearance());
-            assertDoesNotThrow(()->paint(panel,0,10));
-            assertDoesNotThrow(()->paint(panel,10,0));
-            assertArrayEquals(pixels(paint(panel,240,240)),pixels(paint(panel,240,240)));
-            assertArrayEquals(pixels(RoseDrawing.renderScene(280,240)),pixels(paint(panel,280,240)));
-            assertArrayEquals(pixels(RoseDrawing.renderScene(280,300)),pixels(paint(panel,280,300)));
-            assertEquals(RoseDrawing.ORIGINAL,panel.getAppearance());
-        });
     }
+
+    @Nested @DisplayName("Preview history")
+    class PreviewHistory {
     @Test void navigationRequiresEdt() {
         assertFalse(SwingUtilities.isEventDispatchThread());
         RoseDrawing panel = new RoseDrawing();
@@ -150,90 +156,171 @@ class RoseDrawingTest {
             assertFalse(panel.canGoForward(), "A fresh REDRAW discards the abandoned forward branch");
         });
     }
-    @Test void redrawButtonChangesImageAndKeepsItOnResize() throws Exception {
-        SwingUtilities.invokeAndWait(()->{
-            JPanel content=RoseDrawing.createContent();
-            BorderLayout layout=(BorderLayout)content.getLayout();
-            RoseDrawing canvas=(RoseDrawing)layout.getLayoutComponent(BorderLayout.CENTER);
-            JPanel toolbar=(JPanel)layout.getLayoutComponent(BorderLayout.SOUTH);
-            JPanel buttonRow=(JPanel)toolbar.getComponent(0);
-            JPanel backColumn=(JPanel)buttonRow.getComponent(0);
-            JPanel redrawColumn=(JPanel)buttonRow.getComponent(2);
-            JPanel forwardColumn=(JPanel)buttonRow.getComponent(4);
-            JButton back=(JButton)backColumn.getComponent(0);
-            JButton redraw=(JButton)redrawColumn.getComponent(0);
-            JButton forward=(JButton)forwardColumn.getComponent(0);
-            JLabel label=(JLabel)redrawColumn.getComponent(1);
-
-            assertEquals("BACK",back.getText());
-            assertFalse(back.isEnabled());
-            assertNotNull(back.getIcon());
-            assertNotNull(back.getRolloverIcon());
-            assertNotNull(back.getPressedIcon());
-            assertNotNull(back.getDisabledIcon());
-            assertEquals(new Dimension(136,143),back.getPreferredSize());
-            assertEquals("BACK",back.getAccessibleContext().getAccessibleName());
-
-            assertEquals("REDRAW",redraw.getText());assertTrue(redraw.isEnabled());
-            assertNotNull(redraw.getIcon());
-            assertNotNull(redraw.getRolloverIcon());
-            assertNotNull(redraw.getPressedIcon());
-            assertEquals(new Dimension(300,143),redraw.getPreferredSize());
-            assertEquals("REDRAW",redraw.getAccessibleContext().getAccessibleName());
-
-            assertEquals("FORWARD",forward.getText());
-            assertFalse(forward.isEnabled());
-            assertNotNull(forward.getIcon());
-            assertNotNull(forward.getRolloverIcon());
-            assertNotNull(forward.getPressedIcon());
-            assertNotNull(forward.getDisabledIcon());
-            assertEquals(new Dimension(136,143),forward.getPreferredSize());
-            assertEquals("FORWARD",forward.getAccessibleContext().getAccessibleName());
-
-            int[] before=pixels(paint(canvas,260,260));
-            redraw.doClick(0);
-            var first=canvas.getAppearance();
-            assertTrue(back.isEnabled());
-            assertEquals(first.style().name().replace('_',' '),label.getText());
-            int[] firstPixels=pixels(paint(canvas,260,260));
-            assertFalse(Arrays.equals(before,firstPixels),"Stale image after redraw");
-
-            redraw.doClick(0);
-            var second=canvas.getAppearance();
-            assertNotEquals(first,second);
-            int[] secondPixels=pixels(paint(canvas,260,260));
-
-            back.doClick(0);
-            assertEquals(first,canvas.getAppearance());
-            assertArrayEquals(firstPixels,pixels(paint(canvas,260,260)));
-            assertEquals(first.style().name().replace('_',' '),label.getText());
-            assertTrue(forward.isEnabled());
-
-            forward.doClick(0);
-            assertEquals(second,canvas.getAppearance(),"FORWARD must restore the saved preview after BACK");
-            assertArrayEquals(secondPixels,pixels(paint(canvas,260,260)));
-            assertFalse(forward.isEnabled());
-
-            back.doClick(0);
-            assertEquals(first,canvas.getAppearance());
-            assertTrue(forward.isEnabled());
-            redraw.doClick(0);
-            assertNotEquals(second,canvas.getAppearance(),"REDRAW after BACK must create a new preview, not navigate forward");
-            assertFalse(forward.isEnabled(),"New REDRAW branch must clear saved forward navigation");
-
-            for(int i=0;i<10;i++) {
-                var old=canvas.getAppearance();redraw.doClick(0);var next=canvas.getAppearance();
-                assertNotEquals(old.style(),next.style());assertNotEquals(old.hueShift(),next.hueShift());
-                assertTrue(next.saturation()>=.55f && next.saturation()<1.21f);
-                assertTrue(next.exposure()>=.85f && next.exposure()<1.26f);
-                assertEquals(next.style().name().replace('_',' '),label.getText());
-            }
-            var saved=canvas.getAppearance();int[] after=pixels(paint(canvas,260,260));
-            assertArrayEquals(pixels(RoseDrawing.renderScene(260,260,saved)),after);
-            assertArrayEquals(after,pixels(paint(canvas,260,260)));
-            paint(canvas,340,220);assertEquals(saved,canvas.getAppearance());
+    @Test void flowerOptionsCreateReversibleHistoryWithoutChangingPalette() throws Exception {
+        RoseDrawing panel = new RoseDrawing();
+        var bud = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 4, false);
+        var dewyBud = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 4, true);
+        assertThrows(IllegalStateException.class, () -> panel.setFlowerOptions(bud));
+        SwingUtilities.invokeAndWait(() -> {
+            assertThrows(NullPointerException.class, () -> panel.setFlowerOptions(null));
+            panel.setFlowerOptions(RoseDrawing.DEFAULT_FLOWER);
+            assertFalse(panel.canGoBack());
+            panel.setFlowerOptions(bud);
+            assertEquals(RoseDrawing.ORIGINAL, panel.getAppearance());
+            assertEquals(bud, panel.getFlowerOptions());
+            int[] budPixels = pixels(paint(panel, 260, 260));
+            panel.setFlowerOptions(bud);
+            assertFalse(panel.canGoForward(), "No-op change must preserve history");
+            panel.setFlowerOptions(dewyBud);
+            assertArrayEquals(pixels(RoseDrawing.renderScene(260, 260, RoseDrawing.ORIGINAL, dewyBud)),
+                    pixels(paint(panel, 260, 260)));
+            assertTrue(panel.back());
+            assertEquals(bud, panel.getFlowerOptions());
+            assertArrayEquals(budPixels, pixels(paint(panel, 260, 260)));
+            assertTrue(panel.forward());
+            assertEquals(dewyBud, panel.getFlowerOptions());
+            assertTrue(panel.back());
+            panel.setFlowerOptions(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 8, false));
+            assertFalse(panel.canGoForward(), "Editing after BACK must discard forward branch");
+            panel.redraw();
+            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 8, false),
+                    panel.getFlowerOptions());
         });
     }
+
+    }
+
+    @Nested @DisplayName("Swing UI contract")
+    class SwingUi {
+    @Test void panelCachesAndResizesWithoutChangingAppearance() throws Exception {
+        SwingUtilities.invokeAndWait(()->{
+            RoseDrawing panel=new RoseDrawing();
+            assertEquals(new Dimension(1000,1000),panel.getPreferredSize());
+            assertEquals(RoseDrawing.ORIGINAL,panel.getAppearance());
+            assertDoesNotThrow(()->paint(panel,0,10));
+            assertDoesNotThrow(()->paint(panel,10,0));
+            assertArrayEquals(pixels(paint(panel,240,240)),pixels(paint(panel,240,240)));
+            assertArrayEquals(pixels(RoseDrawing.renderScene(280,240)),pixels(paint(panel,280,240)));
+            assertArrayEquals(pixels(RoseDrawing.renderScene(280,300)),pixels(paint(panel,280,300)));
+            assertEquals(RoseDrawing.ORIGINAL,panel.getAppearance());
+        });
+    }
+    @Test
+    void redrawBackAndForwardButtonsHonorTheUiContract() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            JPanel content = RoseDrawing.createContent();
+            RoseDrawing canvas = SwingTestSupport.findFirst(content, RoseDrawing.class);
+            JButton back = SwingTestSupport.findByAccessibleName(content, JButton.class, "BACK");
+            JButton redraw = SwingTestSupport.findByAccessibleName(content, JButton.class, "REDRAW");
+            JButton forward = SwingTestSupport.findByAccessibleName(content, JButton.class, "FORWARD");
+            JLabel styleLabel = SwingTestSupport.findLabel(content, "VELVET");
+
+            assertAll(
+                    () -> assertFalse(back.isEnabled()),
+                    () -> assertTrue(redraw.isEnabled()),
+                    () -> assertFalse(forward.isEnabled()),
+                    () -> assertEquals(new Dimension(136, 143), back.getPreferredSize()),
+                    () -> assertEquals(new Dimension(300, 143), redraw.getPreferredSize()),
+                    () -> assertEquals(new Dimension(136, 143), forward.getPreferredSize()),
+                    () -> assertNotNull(back.getIcon()),
+                    () -> assertNotNull(back.getRolloverIcon()),
+                    () -> assertNotNull(back.getPressedIcon()),
+                    () -> assertNotNull(back.getDisabledIcon()),
+                    () -> assertNotNull(redraw.getIcon()),
+                    () -> assertNotNull(redraw.getRolloverIcon()),
+                    () -> assertNotNull(redraw.getPressedIcon()),
+                    () -> assertNotNull(forward.getIcon()),
+                    () -> assertNotNull(forward.getRolloverIcon()),
+                    () -> assertNotNull(forward.getPressedIcon()),
+                    () -> assertNotNull(forward.getDisabledIcon())
+            );
+
+            int[] before = pixels(paint(canvas, 260, 260));
+            redraw.doClick(0);
+            RoseDrawing.Appearance first = canvas.getAppearance();
+            int[] firstPixels = pixels(paint(canvas, 260, 260));
+            assertAll(
+                    () -> assertTrue(back.isEnabled()),
+                    () -> assertFalse(forward.isEnabled()),
+                    () -> assertEquals(first.style().name().replace('_', ' '), styleLabel.getText()),
+                    () -> assertFalse(Arrays.equals(before, firstPixels), "REDRAW must invalidate the rendered frame")
+            );
+
+            redraw.doClick(0);
+            RoseDrawing.Appearance second = canvas.getAppearance();
+            int[] secondPixels = pixels(paint(canvas, 260, 260));
+            assertNotEquals(first, second);
+
+            back.doClick(0);
+            assertAll(
+                    () -> assertEquals(first, canvas.getAppearance()),
+                    () -> assertArrayEquals(firstPixels, pixels(paint(canvas, 260, 260))),
+                    () -> assertTrue(forward.isEnabled())
+            );
+
+            forward.doClick(0);
+            assertAll(
+                    () -> assertEquals(second, canvas.getAppearance()),
+                    () -> assertArrayEquals(secondPixels, pixels(paint(canvas, 260, 260))),
+                    () -> assertFalse(forward.isEnabled())
+            );
+
+            back.doClick(0);
+            redraw.doClick(0);
+            assertAll(
+                    () -> assertNotEquals(second, canvas.getAppearance(),
+                            "REDRAW after BACK must create a new history branch"),
+                    () -> assertFalse(forward.isEnabled(),
+                            "Creating a new branch must discard the abandoned forward branch")
+            );
+
+            RoseDrawing.Appearance saved = canvas.getAppearance();
+            int[] savedPixels = pixels(paint(canvas, 260, 260));
+            assertArrayEquals(pixels(RoseDrawing.renderScene(260, 260, saved)), savedPixels);
+            paint(canvas, 340, 220);
+            assertEquals(saved, canvas.getAppearance(), "Resize must never randomize the current appearance");
+        });
+    }
+
+    @Test
+    void flowerControlsRestoreTheExactHistoryState() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            JPanel content = RoseDrawing.createContent();
+            RoseDrawing canvas = SwingTestSupport.findFirst(content, RoseDrawing.class);
+            JButton back = SwingTestSupport.findByAccessibleName(content, JButton.class, "BACK");
+            JButton forward = SwingTestSupport.findByAccessibleName(content, JButton.class, "FORWARD");
+            @SuppressWarnings("unchecked")
+            JComboBox<RoseDrawing.BloomStage> bloom = SwingTestSupport.findByAccessibleName(
+                    content, JComboBox.class, "Bloom stage");
+            JSpinner layers = SwingTestSupport.findByAccessibleName(content, JSpinner.class, "Petal layers");
+            JCheckBox dew = SwingTestSupport.findByAccessibleName(content, JCheckBox.class, "Morning dew");
+
+            bloom.setSelectedItem(RoseDrawing.BloomStage.BUD);
+            layers.setValue(7);
+            dew.doClick();
+            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 7, true),
+                    canvas.getFlowerOptions());
+
+            back.doClick();
+            assertFalse(dew.isSelected());
+            assertEquals(7, layers.getValue());
+            back.doClick();
+            assertEquals(5, layers.getValue());
+            back.doClick();
+            assertEquals(RoseDrawing.BloomStage.CLASSIC, bloom.getSelectedItem());
+            assertFalse(back.isEnabled());
+
+            for (int i = 0; i < 3; i++) forward.doClick();
+            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 7, true),
+                    canvas.getFlowerOptions());
+            assertFalse(forward.isEnabled());
+        });
+    }
+
+    }
+
+    @Nested @DisplayName("Flower options")
+    class FlowerOptionsContract {
     @Test void flowerOptionsValidateBoundsAndNulls() {
         assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.CLASSIC, 5, false),
                 RoseDrawing.DEFAULT_FLOWER);
@@ -270,70 +357,10 @@ class RoseDrawingTest {
         assertArrayEquals(dewy, pixels(RoseDrawing.renderScene(280, 280, RoseDrawing.ORIGINAL, dew)));
     }
 
-    @Test void flowerOptionsCreateReversibleHistoryWithoutChangingPalette() throws Exception {
-        RoseDrawing panel = new RoseDrawing();
-        var bud = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 4, false);
-        var dewyBud = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 4, true);
-        assertThrows(IllegalStateException.class, () -> panel.setFlowerOptions(bud));
-        SwingUtilities.invokeAndWait(() -> {
-            assertThrows(NullPointerException.class, () -> panel.setFlowerOptions(null));
-            panel.setFlowerOptions(RoseDrawing.DEFAULT_FLOWER);
-            assertFalse(panel.canGoBack());
-            panel.setFlowerOptions(bud);
-            assertEquals(RoseDrawing.ORIGINAL, panel.getAppearance());
-            assertEquals(bud, panel.getFlowerOptions());
-            int[] budPixels = pixels(paint(panel, 260, 260));
-            panel.setFlowerOptions(bud);
-            assertFalse(panel.canGoForward(), "No-op change must preserve history");
-            panel.setFlowerOptions(dewyBud);
-            assertArrayEquals(pixels(RoseDrawing.renderScene(260, 260, RoseDrawing.ORIGINAL, dewyBud)),
-                    pixels(paint(panel, 260, 260)));
-            assertTrue(panel.back());
-            assertEquals(bud, panel.getFlowerOptions());
-            assertArrayEquals(budPixels, pixels(paint(panel, 260, 260)));
-            assertTrue(panel.forward());
-            assertEquals(dewyBud, panel.getFlowerOptions());
-            assertTrue(panel.back());
-            panel.setFlowerOptions(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 8, false));
-            assertFalse(panel.canGoForward(), "Editing after BACK must discard forward branch");
-            panel.redraw();
-            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 8, false),
-                    panel.getFlowerOptions());
-        });
     }
 
-    @Test void guiFlowerControlsRestoreTheExactHistoryState() throws Exception {
-        SwingUtilities.invokeAndWait(() -> {
-            JPanel content = RoseDrawing.createContent();
-            JPanel toolbar = (JPanel) ((BorderLayout) content.getLayout()).getLayoutComponent(BorderLayout.SOUTH);
-            JPanel row = (JPanel) toolbar.getComponent(1);
-            @SuppressWarnings("unchecked")
-            JComboBox<RoseDrawing.BloomStage> bloom = (JComboBox<RoseDrawing.BloomStage>) row.getComponent(1);
-            JSpinner layers = (JSpinner) row.getComponent(3);
-            JCheckBox dew = (JCheckBox) row.getComponent(4);
-            JPanel buttons = (JPanel) toolbar.getComponent(0);
-            JButton back = (JButton) ((JPanel) buttons.getComponent(0)).getComponent(0);
-            JButton forward = (JButton) ((JPanel) buttons.getComponent(4)).getComponent(0);
-            RoseDrawing canvas = (RoseDrawing) ((BorderLayout) content.getLayout()).getLayoutComponent(BorderLayout.CENTER);
-
-            bloom.setSelectedItem(RoseDrawing.BloomStage.BUD);
-            layers.setValue(7);
-            dew.doClick();
-            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 7, true), canvas.getFlowerOptions());
-            back.doClick();
-            assertFalse(dew.isSelected());
-            assertEquals(7, layers.getValue());
-            back.doClick();
-            assertEquals(5, layers.getValue());
-            back.doClick();
-            assertEquals(RoseDrawing.BloomStage.CLASSIC, bloom.getSelectedItem());
-            assertFalse(back.isEnabled());
-            for (int i = 0; i < 3; i++) forward.doClick();
-            assertEquals(new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 7, true), canvas.getFlowerOptions());
-            assertFalse(forward.isEnabled());
-        });
-    }
-
+    @Nested @DisplayName("Command-line contract")
+    class CommandLine {
     @Test void cliCanExportAllFlowerOptionsAndRejectsInvalidFlags() throws Exception {
         Path file = temp.resolve("dewy full rose.png");
         var flower = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.FULL, 6, true);
@@ -362,7 +389,9 @@ class RoseDrawingTest {
         assertNotNull(image);assertEquals(1600,image.getWidth());assertEquals(1600,image.getHeight());
         assertArrayEquals(pixels(RoseDrawing.renderScene(1600,1600)),pixels(image));
     }
-    @Test void legacyLauncherExportsSameArtwork() throws Exception {
+    @Test
+    @SuppressWarnings("deprecation")
+    void legacyLauncherExportsSameArtwork() throws Exception {
         Path file=temp.resolve("legacy.png");
         RoseDrawing_2.main(new String[]{"--export",file.toString()});
         assertArrayEquals(pixels(RoseDrawing.renderScene(1600,1600)),pixels(ImageIO.read(file.toFile())));
@@ -375,26 +404,32 @@ class RoseDrawingTest {
     }
 
     @Test
-    void rejectsMissingOutputDirectory() {
+    void rejectsMissingOutputDirectoryWithoutLeakingImageIoStackTrace() {
         Path destination = temp.resolve("missing-directory").resolve("rose.png");
-
         PrintStream originalError = System.err;
         ByteArrayOutputStream capturedError = new ByteArrayOutputStream();
 
         try (PrintStream capture = new PrintStream(capturedError)) {
             System.setErr(capture);
+            IOException failure = assertThrows(IOException.class, () ->
+                    RoseDrawing.main(new String[]{"--export", destination.toString()}));
 
-            assertThrows(IOException.class, () ->
-                    RoseDrawing.main(new String[]{
-                            "--export",
-                            destination.toString()
-                    })
+            assertAll(
+                    () -> assertTrue(failure.getMessage().contains("Output directory does not exist")),
+                    () -> assertFalse(java.nio.file.Files.exists(destination)),
+                    () -> assertEquals("", capturedError.toString(),
+                            "Expected validation failure must not print a stack trace")
             );
-
-            assertFalse(java.nio.file.Files.exists(destination));
         } finally {
             System.setErr(originalError);
         }
+    }
+
+    @Test
+    void rejectsDirectoryAsOutputFile() {
+        IOException failure = assertThrows(IOException.class, () ->
+                RoseDrawing.main(new String[]{"--export", temp.toString()}));
+        assertTrue(failure.getMessage().contains("Output path is a directory"));
     }
     @Test void rejectsMissingAndExcessArguments() {
         assertThrows(IllegalArgumentException.class,()->RoseDrawing.main(new String[]{"--export"}));
@@ -407,5 +442,30 @@ class RoseDrawingTest {
             System.setErr(capture);RoseDrawing.main(new String[0]);
         } finally {System.setErr(original);}
         assertTrue(bytes.toString().contains("--export rose.png"));
+    }
+
+    @Test void cliExportsStylesHuesSeedsSizesAndViews() throws Exception {
+        Path file = temp.resolve("engraved.png");
+        RoseDrawing.main(new String[]{"--export", file.toString(), "--style", "engraving", "--hue", "0.25",
+                "--seed", "77", "--size", "180", "--yaw", "-40", "--pitch", "12", "--bloom", "bud", "--dew"});
+        var look = new RoseDrawing.Appearance(77, .25f, 1, 1, RoseDrawing.Style.ENGRAVING);
+        var flower = new RoseDrawing.FlowerOptions(RoseDrawing.BloomStage.BUD, 5, true);
+        assertArrayEquals(pixels(RoseDrawing.renderScene(180, 180, look, flower, new RoseDrawing.View(-40, 12))),
+                pixels(ImageIO.read(file.toFile())));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"--style,chrome", "--hue,1.5", "--hue,red", "--seed,1.5", "--size,8", "--size,big",
+            "--yaw,400", "--pitch,60", "--pitch,up", "--layers,2", "--size,9000"})
+    void cliRejectsInvalidValues(String flag, String value) {
+        assertThrows(IllegalArgumentException.class, () ->
+                RoseDrawing.main(new String[]{"--export", temp.resolve("x.png").toString(), flag, value}));
+    }
+
+    @Test void cliRejectsFlagsWithoutValues() {
+        for (String flag : new String[]{"--style", "--hue", "--seed", "--size", "--yaw", "--pitch"})
+            assertThrows(IllegalArgumentException.class, () ->
+                    RoseDrawing.main(new String[]{"--export", temp.resolve("x.png").toString(), flag}));
+    }
     }
 }

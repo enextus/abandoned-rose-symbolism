@@ -3,19 +3,34 @@ package org.example;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
-import java.awt.geom.*;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-/** Procedural Java2D painting. No downloaded images, fonts or runtime dependencies. */
+/**
+ * Rosa relicta: a procedurally modelled, physically lit 3D rose painted with pure Java2D/Swing.
+ * No downloaded images, fonts or runtime dependencies.
+ *
+ * <p>On screen the panel renders off the event dispatch thread (the window never freezes on
+ * resize or REDRAW) and can be turned with the mouse or the arrow keys. Painting into an
+ * off-screen graphics context (printing, tests, exports) stays synchronous and pixel-identical
+ * to {@link #renderScene}.
+ */
 public final class RoseDrawing extends JPanel {
+    private static final long serialVersionUID = 3L;
+
     public enum Style { VELVET, ENGRAVING, ART_NOUVEAU, FADED_INK }
+
     public record Appearance(long seed, float hueShift, float saturation, float exposure, Style style) {
         public Appearance {
             if (style == null || !Float.isFinite(hueShift) || !Float.isFinite(saturation)
@@ -23,8 +38,10 @@ public final class RoseDrawing extends JPanel {
                 throw new IllegalArgumentException("Invalid appearance");
         }
     }
+
     /** Independent, geometry-level controls for the flower. */
     public enum BloomStage { BUD, CLASSIC, FULL }
+
     public record FlowerOptions(BloomStage bloom, int petalLayers, boolean dew) {
         public FlowerOptions {
             Objects.requireNonNull(bloom, "bloom");
@@ -32,30 +49,70 @@ public final class RoseDrawing extends JPanel {
                 throw new IllegalArgumentException("Petal layers must be between 3 and 8");
         }
     }
+
+    /** Camera around the rose in degrees: yaw turns the plant, pitch raises (+) or lowers (-) the eye. */
+    public record View(double yaw, double pitch) {
+        public static final View DEFAULT = new View(0, 0);
+        public static final double MIN_PITCH = -30, MAX_PITCH = 45;
+
+        public View {
+            if (!Double.isFinite(yaw) || !Double.isFinite(pitch) || pitch < MIN_PITCH || pitch > MAX_PITCH)
+                throw new IllegalArgumentException("View needs a finite yaw and a pitch in [-30, 45]");
+        }
+
+        /** This view turned by the given amounts, pitch clamped to the allowed range, yaw kept in [0, 360). */
+        public View turned(double deltaYaw, double deltaPitch) {
+            double yaw2 = (yaw + deltaYaw) % 360;
+            return new View(yaw2 < 0 ? yaw2 + 360 : yaw2,
+                    Math.max(MIN_PITCH, Math.min(MAX_PITCH, pitch + deltaPitch)));
+        }
+    }
+
     private record RoseState(Appearance appearance, FlowerOptions flower) { }
+
+    /** What a rendered image shows; equal keys mean pixel-identical images. */
+    private record FrameKey(int width, int height, Appearance appearance, FlowerOptions flower, View view,
+                            RoseRenderer.Quality quality) { }
+
     public static final Appearance ORIGINAL = new Appearance(1913, 0, 1, 1, Style.VELVET);
     public static final FlowerOptions DEFAULT_FLOWER = new FlowerOptions(BloomStage.CLASSIC, 5, false);
-    private static final Color[] DUST_COLORS = new Color[15];
-    private static final BasicStroke PETAL_VEIN_STROKE = new BasicStroke(.65f);
-    private static final BasicStroke PETAL_HATCH_STROKE = new BasicStroke(.8f);
-    static {
-        for (int i = 0; i < DUST_COLORS.length; i++)
-            DUST_COLORS[i] = new Color(202, 185, 138, i + 2);
-    }
-    private final Random choices = new Random();
-    private final List<RoseState> history = new ArrayList<>();
+    static final Color CANVAS_BACKGROUND = new Color(17, 22, 23);
+    private static final Color TOOLBAR_BACKGROUND = new Color(20, 29, 27);
+    private static final Color TEXT = new Color(214, 197, 159);
+
+    /** One background thread renders frames for every on-screen panel; only the latest request matters. */
+    private static final ExecutorService RENDER_THREAD = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "rose-render");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private final transient Random choices = new Random();
+    private final transient List<RoseState> history = new ArrayList<>();
     private int historyIndex;
-    private Appearance appearance = ORIGINAL;
-    private FlowerOptions flowerOptions = DEFAULT_FLOWER;
-    private BufferedImage cached;
+    private transient Appearance appearance = ORIGINAL;
+    private transient FlowerOptions flowerOptions = DEFAULT_FLOWER;
+    private transient View view = View.DEFAULT;
+    private transient BufferedImage shown;
+    private transient FrameKey shownKey, inFlight, wanted;
+    private boolean dragging, turntable;
+    private final Timer spin = new Timer(33, event -> stepTurntable());
 
     public RoseDrawing() {
-        setBackground(new Color(17, 22, 23));
+        setBackground(CANVAS_BACKGROUND);
+        setFocusable(true);
+        setToolTipText("Drag to turn the rose · arrow keys to nudge · double-click to reset");
+        setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+        getAccessibleContext().setAccessibleName("Rose artwork");
+        getAccessibleContext().setAccessibleDescription(
+                "Three-dimensional rose; drag or use arrow keys to turn it, Home to reset the view");
         history.add(new RoseState(ORIGINAL, DEFAULT_FLOWER));
+        installTurning();
     }
 
     public Appearance getAppearance() { return appearance; }
     public FlowerOptions getFlowerOptions() { return flowerOptions; }
+    public View getView() { return view; }
     public boolean canGoBack() { return historyIndex > 0; }
     public boolean canGoForward() { return historyIndex + 1 < history.size(); }
     /** Compatibility name retained for callers from 2.3.x. */
@@ -65,7 +122,7 @@ public final class RoseDrawing extends JPanel {
      * Generate a fresh variation from the currently displayed preview.
      * If the user previously navigated BACK, the abandoned forward branch is discarded
      * before the new preview is appended, exactly like starting a new browser-history branch.
-     * Call on the Swing event dispatch thread. Resizing never randomizes the art.
+     * Call on the Swing event dispatch thread. Resizing or turning never randomizes the art.
      */
     public void redraw() {
         requireEdt("redraw");
@@ -95,6 +152,34 @@ public final class RoseDrawing extends JPanel {
         if (!flowerOptions.equals(options)) commitState(appearance, options);
     }
 
+    /** Turns the camera. The view is not part of the BACK/FORWARD history, like the window size. */
+    public void setView(View newView) {
+        requireEdt("setView");
+        Objects.requireNonNull(newView, "view");
+        if (!view.equals(newView)) {
+            view = newView;
+            repaint();
+        }
+    }
+
+    /** Back to the composed default angle. */
+    public void resetView() { setView(View.DEFAULT); }
+
+    public boolean isTurntable() { return turntable; }
+
+    /** Slowly spins the rose (preview quality while moving, full quality once stopped). */
+    public void setTurntable(boolean on) {
+        requireEdt("setTurntable");
+        if (turntable == on) return;
+        turntable = on;
+        if (on) spin.start(); else spin.stop();
+        repaint();
+    }
+
+    private void stepTurntable() {
+        if (inFlight == null) setView(view.turned(1.5, 0));
+    }
+
     private void commitState(Appearance look, FlowerOptions flower) {
         if (canGoForward()) history.subList(historyIndex + 1, history.size()).clear();
         history.add(new RoseState(look, flower));
@@ -105,7 +190,7 @@ public final class RoseDrawing extends JPanel {
     private void restoreState(RoseState state) {
         appearance = state.appearance();
         flowerOptions = state.flower();
-        invalidateArtwork();
+        repaint();
     }
 
     private Appearance createNextAppearance() {
@@ -121,12 +206,55 @@ public final class RoseDrawing extends JPanel {
             throw new IllegalStateException(operation + " must run on the EDT");
     }
 
-    private void invalidateArtwork() {
-        cached = null;
-        repaint();
+    // ------------------------------------------------------------------ turning with mouse and keys
+
+    private void installTurning() {
+        MouseAdapter mouse = new MouseAdapter() {
+            private Point last;
+
+            @Override public void mousePressed(MouseEvent e) {
+                requestFocusInWindow();
+                last = e.getPoint();
+            }
+
+            @Override public void mouseDragged(MouseEvent e) {
+                if (last == null) return;
+                dragging = true;
+                double unit = 360.0 / Math.max(300, Math.min(getWidth(), getHeight()));
+                setView(view.turned((e.getX() - last.x) * unit, (e.getY() - last.y) * unit * .5));
+                last = e.getPoint();
+            }
+
+            @Override public void mouseReleased(MouseEvent e) {
+                last = null;
+                if (dragging) {
+                    dragging = false;
+                    repaint();
+                }
+            }
+
+            @Override public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) resetView();
+            }
+        };
+        addMouseListener(mouse);
+        addMouseMotionListener(mouse);
+        bindKey(KeyEvent.VK_LEFT, "turnLeft", () -> setView(view.turned(-12, 0)));
+        bindKey(KeyEvent.VK_RIGHT, "turnRight", () -> setView(view.turned(12, 0)));
+        bindKey(KeyEvent.VK_UP, "tiltUp", () -> setView(view.turned(0, 5)));
+        bindKey(KeyEvent.VK_DOWN, "tiltDown", () -> setView(view.turned(0, -5)));
+        bindKey(KeyEvent.VK_HOME, "resetView", this::resetView);
     }
 
-    private static final Color TOOLBAR_BACKGROUND = new Color(20, 29, 27);
+    private void bindKey(int key, String name, Runnable action) {
+        getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(key, 0), name);
+        getActionMap().put(name, new AbstractAction(name) {
+            private static final long serialVersionUID = 1L;
+            @Override public void actionPerformed(java.awt.event.ActionEvent e) { action.run(); }
+        });
+    }
+
+    // ------------------------------------------------------------------ toolbar
 
     private static ImageIcon loadButtonIcon(String resourceName) {
         java.net.URL resource = RoseDrawing.class.getResource("/ui/" + resourceName);
@@ -185,11 +313,19 @@ public final class RoseDrawing extends JPanel {
     private static JLabel optionLabel(String text) {
         JLabel label = new JLabel(text);
         label.setFont(new Font(Font.SERIF, Font.PLAIN, 13));
-        label.setForeground(new Color(214, 197, 159));
+        label.setForeground(TEXT);
         return label;
     }
 
-    private static JPanel createOptionsRow(JComboBox<BloomStage> bloom, JSpinner layers, JCheckBox dew) {
+    private static JCheckBox optionCheckBox(String text) {
+        JCheckBox box = new JCheckBox(text);
+        box.setOpaque(false);
+        box.setForeground(TEXT);
+        return box;
+    }
+
+    private static JPanel createOptionsRow(JComboBox<BloomStage> bloom, JSpinner layers, JCheckBox dew,
+                                           JCheckBox spinBox, JButton save) {
         JPanel row = new JPanel(new FlowLayout(FlowLayout.CENTER, 13, 3));
         row.setOpaque(false);
         row.add(optionLabel("Bloom"));
@@ -197,12 +333,18 @@ public final class RoseDrawing extends JPanel {
         row.add(optionLabel("Petal layers"));
         row.add(layers);
         row.add(dew);
+        row.add(spinBox);
+        row.add(save);
         bloom.setToolTipText("Bud / classic rose / fully opened bloom");
-        layers.setToolTipText("Number of concentric petal rings (3–8)");
+        layers.setToolTipText("Number of petal rings (3–8)");
         dew.setToolTipText("Add reproducible water droplets to the petals");
+        spinBox.setToolTipText("Slowly turn the rose on a turntable");
+        save.setToolTipText("Save the current view as a 1600 × 1600 PNG");
         bloom.getAccessibleContext().setAccessibleName("Bloom stage");
         layers.getAccessibleContext().setAccessibleName("Petal layers");
         dew.getAccessibleContext().setAccessibleName("Morning dew");
+        spinBox.getAccessibleContext().setAccessibleName("Turntable");
+        save.getAccessibleContext().setAccessibleName("Save PNG");
         return row;
     }
 
@@ -223,7 +365,7 @@ public final class RoseDrawing extends JPanel {
         JLabel label = new JLabel("VELVET");
         label.setAlignmentX(Component.CENTER_ALIGNMENT);
         label.setFont(new Font(Font.SERIF, Font.PLAIN, 12));
-        label.setForeground(new Color(214, 197, 159));
+        label.setForeground(TEXT);
         label.setHorizontalAlignment(SwingConstants.CENTER);
         label.setPreferredSize(new Dimension(150, 18));
         label.setMinimumSize(new Dimension(150, 18));
@@ -233,10 +375,10 @@ public final class RoseDrawing extends JPanel {
         JComboBox<BloomStage> bloomControl = new JComboBox<>(BloomStage.values());
         bloomControl.setSelectedItem(DEFAULT_FLOWER.bloom());
         JSpinner layersControl = new JSpinner(new SpinnerNumberModel(DEFAULT_FLOWER.petalLayers(), 3, 8, 1));
-        JCheckBox dewControl = new JCheckBox("Morning dew");
-        dewControl.setOpaque(false);
-        dewControl.setForeground(new Color(214, 197, 159));
-        JPanel optionsRow = createOptionsRow(bloomControl, layersControl, dewControl);
+        JCheckBox dewControl = optionCheckBox("Morning dew");
+        JCheckBox spinControl = optionCheckBox("Turntable");
+        JButton saveButton = new JButton("Save PNG…");
+        JPanel optionsRow = createOptionsRow(bloomControl, layersControl, dewControl, spinControl, saveButton);
 
         JPanel redrawColumn = new JPanel();
         redrawColumn.setLayout(new BoxLayout(redrawColumn, BoxLayout.Y_AXIS));
@@ -290,6 +432,8 @@ public final class RoseDrawing extends JPanel {
         bloomControl.addActionListener(event -> applyFlowerOptions.run());
         layersControl.addChangeListener(event -> applyFlowerOptions.run());
         dewControl.addActionListener(event -> applyFlowerOptions.run());
+        spinControl.addActionListener(event -> canvas.setTurntable(spinControl.isSelected()));
+        saveButton.addActionListener(event -> canvas.chooseAndSave());
         backButton.addActionListener(event -> {
             canvas.back();
             refreshControls.run();
@@ -309,244 +453,168 @@ public final class RoseDrawing extends JPanel {
         content.add(toolbar, BorderLayout.SOUTH);
         return content;
     }
+
+    // ------------------------------------------------------------------ saving
+
+    /** Renders the current appearance, flower and view at {@code size x size} and writes a PNG. */
+    public void saveImage(File file, int size) throws IOException {
+        Objects.requireNonNull(file, "file");
+        if (size < 1) throw new IllegalArgumentException("Positive size required");
+        writePng(renderScene(size, size, appearance, flowerOptions, view), file);
+    }
+
+    private static void writePng(BufferedImage image, File file) throws IOException {
+        Objects.requireNonNull(image, "image");
+        Objects.requireNonNull(file, "file");
+
+        File absolute = file.getAbsoluteFile();
+        File parent = absolute.getParentFile();
+        if (parent != null && !parent.isDirectory())
+            throw new IOException("Output directory does not exist: " + parent);
+        if (absolute.isDirectory())
+            throw new IOException("Output path is a directory: " + absolute);
+
+        if (!ImageIO.write(image, "png", absolute))
+            throw new IOException("No PNG writer available");
+    }
+
+    private void chooseAndSave() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setSelectedFile(new File("rosa-relicta.png"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) saveInBackground(chooser.getSelectedFile());
+    }
+
+    /** Where save failures are reported (a dialog on screen; replaceable for tests). */
+    transient java.util.function.Consumer<String> saveErrors =
+            message -> JOptionPane.showMessageDialog(this, message, "Save PNG", JOptionPane.ERROR_MESSAGE);
+
+    /** Renders the current state at 1600 px off the EDT and writes it; failures go to {@link #saveErrors}. */
+    java.util.concurrent.Future<?> saveInBackground(File file) {
+        Appearance look = appearance;
+        FlowerOptions flower = flowerOptions;
+        View angle = view;
+        return RENDER_THREAD.submit(() -> {
+            try {
+                writePng(renderScene(1600, 1600, look, flower, angle), file);
+            } catch (IOException | RuntimeException failure) {
+                String message = "Could not save " + file + ":\n" + failure.getMessage();
+                SwingUtilities.invokeLater(() -> saveErrors.accept(message));
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------ painting
+
     @Override public Dimension getPreferredSize() { return new Dimension(1000, 1000); }
+
     @Override protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
         int w = getWidth(), h = getHeight();
         if (w < 1 || h < 1) return;
-        if (cached == null || cached.getWidth() != w || cached.getHeight() != h)
-            cached = renderScene(w, h, appearance, flowerOptions);
-        graphics.drawImage(cached, 0, 0, null);
+        boolean moving = dragging || turntable;
+        FrameKey want = new FrameKey(w, h, appearance, flowerOptions, view,
+                moving ? RoseRenderer.Quality.PREVIEW : RoseRenderer.Quality.FINAL);
+        if (!want.equals(shownKey)) {
+            if (onScreen()) {
+                request(want);
+            } else {
+                shown = render(want);
+                shownKey = want;
+            }
+        }
+        if (shown == null) return;
+        if (shown.getWidth() == w && shown.getHeight() == h) {
+            graphics.drawImage(shown, 0, 0, null);
+            return;
+        }
+        // A newer frame is on its way: show the last one scaled to fit, so resizing never blanks.
+        Graphics2D g = (Graphics2D) graphics.create();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            double scale = Math.min(w / (double) shown.getWidth(), h / (double) shown.getHeight());
+            int sw = (int) Math.round(shown.getWidth() * scale), sh = (int) Math.round(shown.getHeight() * scale);
+            g.drawImage(shown, (w - sw) / 2, (h - sh) / 2, sw, sh, null);
+        } finally {
+            g.dispose();
+        }
     }
+
+    private static BufferedImage render(FrameKey key) {
+        return RoseRenderer.render(key.width(), key.height(), key.appearance(), key.flower(), key.view(), key.quality());
+    }
+
+    /** Latest-wins scheduling: at most one frame renders at a time; stale requests are dropped. */
+    private void request(FrameKey key) {
+        wanted = key;
+        if (inFlight == null) start(key);
+    }
+
+    private void start(FrameKey key) {
+        inFlight = key;
+        RENDER_THREAD.submit(() -> {
+            BufferedImage image = null;
+            try {
+                image = render(key);
+            } finally {
+                BufferedImage result = image;
+                SwingUtilities.invokeLater(() -> finished(key, result));
+            }
+        });
+    }
+
+    private void finished(FrameKey key, BufferedImage image) {
+        inFlight = null;
+        if (image != null) {
+            shown = image;
+            shownKey = key;
+            repaint();
+        }
+        if (!wanted.equals(key) && onScreen()) start(wanted);
+    }
+
+    /**
+     * Visible panels render asynchronously; off-screen painting (printing, tests, exports) is
+     * synchronous. Tests can force the on-screen behaviour without a window.
+     */
+    Boolean asyncOverride;
+
+    private boolean onScreen() {
+        return asyncOverride != null ? asyncOverride : isShowing();
+    }
+
+    /** For tests: whether the latest requested frame is the one on display. */
+    boolean isUpToDate() {
+        return inFlight == null && shownKey != null && shownKey.equals(wanted == null ? shownKey : wanted);
+    }
+
+    // ------------------------------------------------------------------ static API
+
     public static BufferedImage renderScene(int width, int height) {
         return renderScene(width, height, ORIGINAL, DEFAULT_FLOWER);
     }
+
     public static BufferedImage renderScene(int width, int height, Appearance appearance) {
         return renderScene(width, height, appearance, DEFAULT_FLOWER);
     }
+
     public static BufferedImage renderScene(int width, int height, Appearance appearance, FlowerOptions flower) {
-        Objects.requireNonNull(appearance, "appearance");
-        Objects.requireNonNull(flower, "flower");
-        if (width < 1 || height < 1) throw new IllegalArgumentException("Positive dimensions required");
-        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = image.createGraphics();
-        try {
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            g.setColor(new Color(17,22,23)); g.fillRect(0,0,width,height);
-            double scale = Math.min(width, height) / 1000.0;
-            g.translate((width-1000*scale)/2, (height-1000*scale)/2); g.scale(scale,scale);
-            paintArtwork(g, appearance, flower);
-        } finally { g.dispose(); }
-        // A different geometry/seed alone does not require an expensive full-image color pass.
-        if (appearance.hueShift() != 0 || appearance.saturation() != 1
-                || appearance.exposure() != 1 || appearance.style() == Style.FADED_INK)
-            tone(image, appearance);
-        return image;
-    }
-    private static void tone(BufferedImage image, Appearance a) {
-        float[] hsb = new float[3];
-        int[] pixels = ((java.awt.image.DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        for (int i = 0; i < pixels.length; i++) {
-            int rgb = pixels[i];
-            Color.RGBtoHSB((rgb >>> 16) & 255, (rgb >>> 8) & 255, rgb & 255, hsb);
-            float saturation = Math.min(1, hsb[1] * a.saturation());
-            float brightness = Math.min(1, hsb[2] * a.exposure());
-            if (a.style() == Style.FADED_INK) { saturation *= .45f; brightness = .08f + brightness * .86f; }
-            pixels[i] = Color.HSBtoRGB((hsb[0] + a.hueShift()) % 1f, saturation, brightness);
-        }
-    }
-    private static Path2D path(double... p) {
-        Path2D q = new Path2D.Double(); q.moveTo(p[0],p[1]);
-        for (int i=2; i<p.length; i+=6) q.curveTo(p[i],p[i+1],p[i+2],p[i+3],p[i+4],p[i+5]);
-        return q;
-    }
-    private static void paintArtwork(Graphics2D g, Appearance appearance, FlowerOptions flower) {
-        Random random = new Random(appearance.seed());
-        g.setPaint(new RadialGradientPaint(470,360,740,new float[]{0,.65f,1},
-                new Color[]{new Color(65,66,51),new Color(27,36,35),new Color(9,15,19)}));
-        g.fillRect(0,0,1000,1000);
-        // Faded architectural remnants and a broken halo: time, absence, memory.
-        g.setColor(new Color(158,145,104,22)); g.setStroke(new BasicStroke(22));
-        g.draw(new Arc2D.Double(154,83,692,950,0,180,Arc2D.OPEN));
-        g.drawLine(154,558,154,906); g.drawLine(846,558,846,906);
-        g.setStroke(new BasicStroke(1.2f));
-        g.setColor(new Color(191,156,93,100));
-        g.draw(new Arc2D.Double(218,129,550,550,18,278,Arc2D.OPEN));
-        g.setColor(new Color(191,156,93,37));
-        g.draw(new Arc2D.Double(204,115,578,578,69,235,Arc2D.OPEN));
-        for(int i=0;i<10500;i++) {
-            int x=random.nextInt(1000), y=random.nextInt(1000);
-            g.setColor(DUST_COLORS[random.nextInt(DUST_COLORS.length)]);
-            g.fillRect(x,y,1+random.nextInt(3),1+random.nextInt(3));
-        }
-        for(int i=0;i<24;i++) {
-            double x=random.nextInt(1000), y=random.nextInt(1000);
-            g.setColor(new Color(6,13,15,50)); g.setStroke(new BasicStroke(.7f));
-            g.draw(path(x,y,x-20,y+26,x+22,y+45,x-8,y+95));
-        }
-        g.setPaint(new GradientPaint(0,790,new Color(10,17,19,0),0,1000,new Color(5,9,12,210)));
-        g.fillRect(0,790,1000,210);
-        Path2D stem=path(476,463,589,575,402,690,539,904);
-        g.setStroke(new BasicStroke(13,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
-        g.setColor(new Color(11,23,20)); g.draw(stem);
-        g.setStroke(new BasicStroke(6,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
-        g.setPaint(new GradientPaint(455,500,new Color(109,119,66),545,890,new Color(36,51,41)));
-        g.draw(stem);
-        leaf(g,498,638,-2.75,1.05); leaf(g,488,714,-.65,.83);
-        for(int i=0;i<4;i++) {
-            double y=595+i*64, x= i==0?508:(i==1?494:(i==2?488:495));
-            Path2D thorn=path(x,y,x+7,y-10,x+20,y-12,x+24,y-20,x+20,y-2,x+9,y+7,x,y+9);
-            g.setColor(new Color(85,93,53)); g.fill(thorn);
-        }
-        // Calyx behind the flower.
-        for(int i=0;i<5;i++) {
-            Graphics2D c=(Graphics2D)g.create(); c.translate(475,473); c.rotate((i-2)*.34);
-            c.setColor(new Color(58+i*5,72+i*4,43));
-            c.fill(path(0,35,-34,1,-50,-37,-38,-86,-15,-34,7,-20,0,35)); c.dispose();
-        }
-        Graphics2D bloom=(Graphics2D)g.create();
-        bloom.translate(473, flower.bloom() == BloomStage.BUD ? 405 : flower.bloom() == BloomStage.FULL ? 374 : 382);
-        bloom.rotate(-.20 + (appearance.equals(ORIGINAL) ? 0 : (random.nextDouble()-.5)*.3));
-        if (flower.bloom() == BloomStage.BUD) bloom.scale(.73, .86);
-        if (flower.bloom() == BloomStage.FULL) bloom.scale(1.13, .96);
-        // Unequal overlapping cupped petals, outside first, tightly folded heart last.
-        double ringStep = Math.min(31, 125.0 / (flower.petalLayers() - 1));
-        for (int ring = 0; ring < flower.petalLayers(); ring++) {
-            int count = flower.bloom() == BloomStage.BUD ? (ring == 0 ? 6 : 5)
-                    : appearance.style() == Style.ART_NOUVEAU ? (ring == 0 ? 7 : 5)
-                    : (ring == 0 ? 9 : 7);
-            if (flower.bloom() == BloomStage.FULL) count += 2;
-            double radius = 172 - ring * ringStep;
-            for (int i = 0; i < count; i++) {
-                double angle = 2 * Math.PI * i / count + ring * .71;
-                petal(bloom, angle, radius, .91 + random.nextDouble() * .20, ring,
-                        appearance.style(), flower.bloom());
-            }
-        }
-        if (flower.dew()) paintBloomDew(bloom, new Random(appearance.seed() ^ 0x5AD0_5EEDL));
-        bloom.setPaint(new RadialGradientPaint(0,0,25,new float[]{0,1},
-            new Color[]{new Color(35,6,18),new Color(112,22,45)}));
-        bloom.fill(new Ellipse2D.Double(-20,-17,40,34));
-        bloom.setColor(new Color(227,113,115,160)); bloom.setStroke(new BasicStroke(1.8f));
-        bloom.draw(path(-15,8,-30,-17,24,-25,15,2,8,16,-9,10,-3,-2)); bloom.dispose();
-        // Fallen petals on the ground; the flower is still alive.
-        fallen(g,343,864,-.4,1); fallen(g,650,913,.4,.78); fallen(g,399,935,2.8,.48);
-        g.setColor(new Color(186,157,104,95)); g.setStroke(new BasicStroke(1));
-        g.drawLine(74,77,74,136); g.drawLine(74,77,132,77);
-        g.drawLine(926,923,868,923); g.drawLine(926,923,926,864);
-        g.setFont(new Font(Font.SERIF,Font.PLAIN,15));
-        g.setColor(new Color(199,184,151,150)); g.drawString("R O S A   /   R E L I C T A",74,958);
-        g.setFont(new Font(Font.SERIF,Font.ITALIC,13));
-        g.setColor(new Color(199,184,151,100)); g.drawString("what remains of tenderness",74,979);
-    }
-    private static void petal(Graphics2D parent, double angle, double radius, double variation,
-                              int ring, Style style, BloomStage stage) {
-        Graphics2D g=(Graphics2D)parent.create();
-        try {
-            g.rotate(angle); g.translate(0,-radius*.40); g.scale(variation,1);
-            double w = radius * (style == Style.ART_NOUVEAU ? .58 : .73)
-                    * (stage == BloomStage.BUD ? .70 : stage == BloomStage.FULL ? 1.15 : 1);
-            double h = radius * (stage == BloomStage.BUD ? 1.18 : stage == BloomStage.FULL ? .88 : 1);
-            Path2D p=path(-w*.78,5,-w*1.22,-h*.35,-w*.82,-h*.92,-w*.26,-h,
-                w*.10,-h*1.10,w*.57,-h*.82,w*.92,-h*.65,
-                w*1.17,-h*.08,w*.50,h*.54,0,h*.52,
-                -w*.32,h*.40,-w*.64,h*.21,-w*.78,5);
-            p.closePath();
-            g.setPaint(new LinearGradientPaint(0,(float)-h,0,(float)(h*.52),new float[]{0,.22f,.62f,1},
-                new Color[]{new Color(193+ring*6,67+ring*5,78+ring*5),new Color(139+ring*9,29+ring*3,52+ring*3),
-                    new Color(80+ring*7,13,34),new Color(34,9,23)}));
-            if (style == Style.ENGRAVING) g.setPaint(new Color(127+ring*9,47,61));
-            g.fill(p); g.setStroke(new BasicStroke(style==Style.ART_NOUVEAU?2.8f:1.2f)); g.setColor(new Color(33,8,20,170)); g.draw(p);
-            g.setColor(new Color(244,147,135,145)); g.setStroke(new BasicStroke(1.7f));
-            g.draw(path(-w*.96,-h*.38,-w*.9,-h*.85,-w*.46,-h*1.08,-w*.26,-h,
-                w*.1,-h*1.1,w*.57,-h*.82,w*.92,-h*.65));
-            Shape clip=g.getClip(); g.clip(p);
-            g.setColor(new Color(238, 140, 130, 16));
-            g.setStroke(PETAL_VEIN_STROKE);
-            for (int k = 0; k < 18; k++) {
-                double x = (k / 17.0 - .5) * w * 1.9;
-                g.draw(path(x,-h,x*.95,-h*.6,x*.4,-h*.1,0,h*.48));
-            }
-            if (style == Style.ENGRAVING || style == Style.FADED_INK) {
-                g.setColor(new Color(27,8,22,style == Style.ENGRAVING?95:40));
-                g.setStroke(PETAL_HATCH_STROKE);
-                for (double y=-h; y<h; y+=style==Style.ENGRAVING?5:9)
-                    g.draw(new Line2D.Double(-w*1.3,y,w*1.3,y+w*.6));
-            }
-            g.setClip(clip);
-        } finally { g.dispose(); }
+        return renderScene(width, height, appearance, flower, View.DEFAULT);
     }
 
-    /** Surface droplets are painted after the petals so they remain visible. */
-    private static void paintBloomDew(Graphics2D g, Random random) {
-        for (int i = 0; i < 26; i++) {
-            double angle = random.nextDouble() * Math.PI * 2;
-            double distance = Math.sqrt(random.nextDouble()) * 138;
-            double x = Math.cos(angle) * distance;
-            double y = Math.sin(angle) * distance;
-            double radius = 2.0 + random.nextDouble() * 3.7;
-            g.setColor(new Color(3, 11, 19, 120));
-            g.fill(new Ellipse2D.Double(x - radius + 1, y - radius + 2, 2 * radius, 2 * radius));
-            g.setPaint(new GradientPaint((float) x, (float) (y - radius),
-                    new Color(230, 249, 247, 195), (float) x, (float) (y + radius),
-                    new Color(97, 157, 160, 65)));
-            g.fill(new Ellipse2D.Double(x - radius, y - radius, 2 * radius, 2 * radius));
-            g.setColor(new Color(255, 255, 255, 225));
-            g.fill(new Ellipse2D.Double(x - radius * .48, y - radius * .54,
-                    radius * .57, radius * .45));
-        }
+    /** Full-quality render of the rose turned to {@code view}; deterministic for equal arguments. */
+    public static BufferedImage renderScene(int width, int height, Appearance appearance, FlowerOptions flower, View view) {
+        return RoseRenderer.render(width, height, appearance, flower, view, RoseRenderer.Quality.FINAL);
     }
 
-    private static void leaf(Graphics2D parent,double x,double y,double angle,double size) {
-        Graphics2D g=(Graphics2D)parent.create(); g.translate(x,y); g.rotate(angle); g.scale(size,size);
-        Path2D p=path(0,0,34,-53,91,-56,148,0,104,4,64,48,0,0);
-        g.setPaint(new GradientPaint(0,-30,new Color(101,110,66),30,37,new Color(20,39,33)));
-        g.fill(p); g.setColor(new Color(164,157,95,115)); g.setStroke(new BasicStroke(1));
-        g.draw(path(0,0,41,-7,98,-7,148,0));
-        for(int i=1;i<7;i++) {int a=i*18; g.drawLine(a,-4,a+15,-23+(i/2));g.drawLine(a,-4,a+10,15);}
-        g.dispose();
-    }
-    private static void fallen(Graphics2D parent,double x,double y,double angle,double size) {
-        Graphics2D g=(Graphics2D)parent.create();g.translate(x,y);g.rotate(angle);g.scale(size,size);
-        g.setColor(new Color(0,0,0,85));g.fill(new Ellipse2D.Double(-45,3,105,19));
-        Path2D p=path(-42,0,-34,-40,28,-31,59,6,24,2,4,39,-42,0);
-        g.setPaint(new GradientPaint(0,-26,new Color(165,55,66),0,25,new Color(50,13,28)));g.fill(p);
-        g.setColor(new Color(211,112,111,150));g.draw(path(-42,0,-20,-14,28,20,59,6));g.dispose();
-    }
+    // ------------------------------------------------------------------ command line
+
     /** Headless PNG export. Existing two-argument usage remains backward compatible. */
     public static void main(String[] args) throws IOException {
         if (args.length > 0) {
             if (args.length < 2 || !"--export".equals(args[0]))
                 throw new IllegalArgumentException(exportUsage());
-            FlowerOptions flower = DEFAULT_FLOWER;
-            for (int i = 2; i < args.length; i++) {
-                String flag = args[i];
-                switch (flag) {
-                    case "--bloom" -> {
-                        if (++i >= args.length) throw new IllegalArgumentException(exportUsage());
-                        BloomStage stage;
-                        try { stage = BloomStage.valueOf(args[i].toUpperCase(Locale.ROOT)); }
-                        catch (IllegalArgumentException invalid) {
-                            throw new IllegalArgumentException("Bloom must be bud, classic, or full", invalid);
-                        }
-                        flower = new FlowerOptions(stage, flower.petalLayers(), flower.dew());
-                    }
-                    case "--layers" -> {
-                        if (++i >= args.length) throw new IllegalArgumentException(exportUsage());
-                        int layers;
-                        try { layers = Integer.parseInt(args[i]); }
-                        catch (NumberFormatException invalid) {
-                            throw new IllegalArgumentException("Petal layers must be an integer from 3 to 8", invalid);
-                        }
-                        flower = new FlowerOptions(flower.bloom(), layers, flower.dew());
-                    }
-                    case "--dew" -> flower = new FlowerOptions(flower.bloom(), flower.petalLayers(), true);
-                    default -> throw new IllegalArgumentException(exportUsage());
-                }
-            }
-            if (!ImageIO.write(renderScene(1600, 1600, ORIGINAL, flower), "png", new File(args[1])))
-                throw new IOException("No PNG writer available");
+            Export export = Export.parse(args);
+            writePng(renderScene(export.size, export.size, export.look, export.flower, export.view), new File(args[1]));
             return;
         }
         if (GraphicsEnvironment.isHeadless()) {
@@ -567,8 +635,81 @@ public final class RoseDrawing extends JPanel {
         });
     }
 
+    /** Parsed {@code --export} options. */
+    static final class Export {
+        int size = 1600;
+        FlowerOptions flower = DEFAULT_FLOWER;
+        Appearance look = ORIGINAL;
+        View view = View.DEFAULT;
+
+        static Export parse(String[] args) {
+            Export e = new Export();
+            for (int i = 2; i < args.length; i++) {
+                String flag = args[i];
+                if ("--dew".equals(flag)) {
+                    e.flower = new FlowerOptions(e.flower.bloom(), e.flower.petalLayers(), true);
+                    continue;
+                }
+                if (++i >= args.length) throw new IllegalArgumentException(exportUsage());
+                String value = args[i];
+                switch (flag) {
+                    case "--bloom" -> e.flower = new FlowerOptions(
+                            enumValue(BloomStage.class, value, "Bloom must be bud, classic, or full"),
+                            e.flower.petalLayers(), e.flower.dew());
+                    case "--layers" -> e.flower = new FlowerOptions(e.flower.bloom(),
+                            (int) integer(value, 3, 8, "Petal layers must be an integer from 3 to 8"), e.flower.dew());
+                    case "--style" -> e.look = new Appearance(e.look.seed(), e.look.hueShift(), e.look.saturation(),
+                            e.look.exposure(), enumValue(Style.class, value,
+                            "Style must be velvet, engraving, art_nouveau, or faded_ink"));
+                    case "--hue" -> e.look = new Appearance(e.look.seed(), (float) range(value, 0, 1,
+                            "Hue must be a number from 0 to 1"), e.look.saturation(), e.look.exposure(), e.look.style());
+                    case "--seed" -> e.look = new Appearance(integer(value, Long.MIN_VALUE, Long.MAX_VALUE,
+                            "Seed must be an integer"), e.look.hueShift(), e.look.saturation(), e.look.exposure(), e.look.style());
+                    case "--size" -> e.size = (int) integer(value, 16, 8192, "Size must be an integer from 16 to 8192");
+                    case "--yaw" -> e.view = new View(range(value, -360, 360,
+                            "Yaw must be a number of degrees from -360 to 360"), e.view.pitch());
+                    case "--pitch" -> e.view = new View(e.view.yaw(), range(value, View.MIN_PITCH, View.MAX_PITCH,
+                            "Pitch must be a number of degrees from -30 to 45"));
+                    default -> throw new IllegalArgumentException(exportUsage());
+                }
+            }
+            return e;
+        }
+
+        private static <E extends Enum<E>> E enumValue(Class<E> type, String text, String message) {
+            try {
+                return Enum.valueOf(type, text.toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException(message, invalid);
+            }
+        }
+
+        private static long integer(String text, long min, long max, String message) {
+            long value;
+            try {
+                value = Long.parseLong(text);
+            } catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException(message, invalid);
+            }
+            if (value < min || value > max) throw new IllegalArgumentException(message);
+            return value;
+        }
+
+        private static double range(String text, double min, double max, String message) {
+            double value;
+            try {
+                value = Double.parseDouble(text);
+            } catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException(message, invalid);
+            }
+            if (!(value >= min && value <= max)) throw new IllegalArgumentException(message);
+            return value;
+        }
+    }
+
     private static String exportUsage() {
-        return "Usage: java -jar abandoned-rose-symbolism.jar "
-                + "[--export rose.png [--bloom bud|classic|full] [--layers 3..8] [--dew]]";
+        return "Usage: java -jar abandoned-rose-symbolism.jar [--export rose.png [--bloom bud|classic|full]"
+                + " [--layers 3..8] [--dew] [--style velvet|engraving|art_nouveau|faded_ink] [--hue 0..1]"
+                + " [--seed n] [--size 16..8192] [--yaw degrees] [--pitch -30..45]]";
     }
 }
